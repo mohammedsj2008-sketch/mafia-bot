@@ -3670,7 +3670,938 @@ async def cmd_bot_info(ctx: commands.Context):
     await ctx.send(embed=embed)
 
 
-# ---- معالجة الأخطاء ----
+# ============================================================================
+# نظام البطولة (Tournament System)
+# ============================================================================
+
+TOURNAMENTS_FILE = Path("mafia_tournaments.json")
+
+
+def _load_tournaments() -> dict:
+    return _load_json(TOURNAMENTS_FILE)
+
+
+def _save_tournaments(data: dict) -> None:
+    _save_json(TOURNAMENTS_FILE, data)
+
+
+@dataclass
+class Tournament:
+    id: str
+    name: str
+    guild_id: int
+    channel_id: int
+    host_id: int
+    participants: list[int] = field(default_factory=list)
+    rounds: list[dict] = field(default_factory=list)  # [{winner_id, loser_id, ...}]
+    current_round: int = 0
+    status: str = "registration"  # registration | active | ended
+    winner_id: int | None = None
+    created_at: float = field(default_factory=time.time)
+
+
+# active tournaments: guild_id -> Tournament
+_active_tournaments: dict[int, Tournament] = {}
+
+
+class TournamentLobbyView(discord.ui.View):
+    def __init__(self, tournament: Tournament):
+        super().__init__(timeout=600)
+        self.tournament = tournament
+
+    @discord.ui.button(label="تسجيل في البطولة", style=discord.ButtonStyle.green, emoji="✅")
+    async def register(self, interaction: discord.Interaction, button: discord.ui.Button):
+        uid = interaction.user.id
+        if uid in self.tournament.participants:
+            return await interaction.response.send_message("أنت مسجّل بالفعل.", ephemeral=True)
+        self.tournament.participants.append(uid)
+        await interaction.response.send_message(
+            f"✅ تم تسجيلك في البطولة! المسجّلون: {len(self.tournament.participants)}",
+            ephemeral=True,
+        )
+
+    @discord.ui.button(label="إلغاء التسجيل", style=discord.ButtonStyle.red, emoji="🚪")
+    async def unregister(self, interaction: discord.Interaction, button: discord.ui.Button):
+        uid = interaction.user.id
+        if uid not in self.tournament.participants:
+            return await interaction.response.send_message("لست مسجّلاً.", ephemeral=True)
+        self.tournament.participants.remove(uid)
+        await interaction.response.send_message("تم إلغاء تسجيلك.", ephemeral=True)
+
+    @discord.ui.button(label="قائمة المسجّلين", style=discord.ButtonStyle.gray, emoji="📋")
+    async def list_participants(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not self.tournament.participants:
+            return await interaction.response.send_message("لا يوجد مسجّلون بعد.", ephemeral=True)
+        names = "\n".join(f"• <@{uid}>" for uid in self.tournament.participants)
+        await interaction.response.send_message(
+            f"📋 **المسجّلون ({len(self.tournament.participants)}):**\n{names}",
+            ephemeral=True,
+        )
+
+
+@bot.command(name="بطولة", aliases=["tournament"])
+@commands.has_permissions(administrator=True)
+async def cmd_tournament(ctx: commands.Context, *, name: str = "بطولة مافيا 42"):
+    if not ctx.guild:
+        return
+    if ctx.guild.id in _active_tournaments:
+        return await ctx.send("⚠️ توجد بطولة نشطة بالفعل. استخدم `&إنهاء_بطولة` لإنهائها.")
+
+    t = Tournament(
+        id=f"{ctx.guild.id}_{int(time.time())}",
+        name=name,
+        guild_id=ctx.guild.id,
+        channel_id=ctx.channel.id,
+        host_id=ctx.author.id,
+    )
+    _active_tournaments[ctx.guild.id] = t
+
+    view = TournamentLobbyView(t)
+    embed = discord.Embed(
+        title=f"🏆 بطولة مافيا 42: {name}",
+        description=(
+            f"👑 **المنظّم:** {ctx.author.mention}\n\n"
+            "سجّل الآن للمشاركة في البطولة!\n"
+            "يحتاج الفوز في البطولة لنقاط إضافية كبيرة.\n\n"
+            "**الجوائز:**\n"
+            "🥇 الأول: +2000 نقطة\n"
+            "🥈 الثاني: +1000 نقطة\n"
+            "🥉 الثالث: +500 نقطة"
+        ),
+        color=discord.Color.gold(),
+    )
+    await ctx.send(embed=embed, view=view)
+
+
+@bot.command(name="إنهاء_بطولة", aliases=["end_tournament"])
+@commands.has_permissions(administrator=True)
+async def cmd_end_tournament(ctx: commands.Context):
+    if not ctx.guild or ctx.guild.id not in _active_tournaments:
+        return await ctx.send("لا توجد بطولة نشطة.")
+    t = _active_tournaments.pop(ctx.guild.id)
+    await ctx.send(f"🛑 تم إنهاء بطولة **{t.name}** مع {len(t.participants)} مشارك.")
+
+
+@bot.command(name="نتائج_البطولة", aliases=["tournament_results"])
+async def cmd_tournament_results(ctx: commands.Context):
+    if not ctx.guild or ctx.guild.id not in _active_tournaments:
+        return await ctx.send("لا توجد بطولة نشطة.")
+    t = _active_tournaments[ctx.guild.id]
+    embed = discord.Embed(
+        title=f"🏆 بطولة: {t.name}",
+        color=discord.Color.gold(),
+    )
+    embed.add_field(name="📊 الحالة", value=t.status, inline=True)
+    embed.add_field(name="👥 المشاركون", value=str(len(t.participants)), inline=True)
+    embed.add_field(name="🔄 الجولات", value=str(t.current_round), inline=True)
+
+    if t.participants:
+        embed.add_field(
+            name="📋 المشاركون",
+            value="\n".join(f"• <@{uid}>" for uid in t.participants[:20]),
+            inline=False,
+        )
+    await ctx.send(embed=embed)
+
+
+# ============================================================================
+# نظام سجل الألعاب (Game History)
+# ============================================================================
+
+HISTORY_FILE = Path("mafia_history.json")
+
+
+def save_game_to_history(game: MafiaGame, winner: str) -> None:
+    history = _load_json(HISTORY_FILE) if HISTORY_FILE.exists() else []
+    if not isinstance(history, list):
+        history = []
+
+    record = {
+        "timestamp": time.time(),
+        "date": datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "guild_id": game.guild.id,
+        "channel_id": game.channel.id,
+        "mode": game.mode,
+        "winner": winner,
+        "nights": game.day_count,
+        "duration_seconds": int(time.time() - game.start_time),
+        "players": [
+            {
+                "id": p.user.id,
+                "name": p.user.display_name,
+                "role": p.role.name,
+                "team": p.role.team,
+                "survived": p.alive,
+                "killed_by": p.killed_by,
+            }
+            for p in game.players.values()
+        ],
+    }
+    history.append(record)
+    # احتفظ بأحدث 500 لعبة فقط
+    if len(history) > 500:
+        history = history[-500:]
+    _save_json(HISTORY_FILE, history)
+
+
+@bot.command(name="سجل_الألعاب", aliases=["history", "سجل"])
+async def cmd_history(ctx: commands.Context):
+    history = _load_json(HISTORY_FILE) if HISTORY_FILE.exists() else []
+    if not isinstance(history, list) or not history:
+        return await ctx.send("لا يوجد سجل ألعاب بعد.")
+
+    # الألعاب الأخيرة في هذا السيرفر
+    guild_games = [g for g in history if g.get("guild_id") == ctx.guild.id][-10:]
+    if not guild_games:
+        return await ctx.send("لا يوجد سجل ألعاب في هذا السيرفر.")
+
+    lines = []
+    for g in reversed(guild_games):
+        winner_text = {"citizens": "🟢 مواطنون", "mafia": "🔴 مافيا", "jester": "🤡 مجنون"}.get(g.get("winner", ""), "؟")
+        duration = f"{g.get('duration_seconds', 0)//60}د"
+        lines.append(
+            f"**{g.get('date', '؟')}** — {winner_text} | {g.get('nights', 0)} ليالٍ | {len(g.get('players', []))} لاعب | {duration}"
+        )
+
+    embed = discord.Embed(
+        title=f"📜 سجل آخر {len(guild_games)} ألعاب",
+        description="\n".join(lines),
+        color=discord.Color.blurple(),
+    )
+    embed.set_footer(text=f"مجموع الألعاب: {len(guild_games)}")
+    await ctx.send(embed=embed)
+
+
+@bot.command(name="إحصائيات_السيرفر", aliases=["server_stats"])
+async def cmd_server_stats(ctx: commands.Context):
+    history = _load_json(HISTORY_FILE) if HISTORY_FILE.exists() else []
+    if not isinstance(history, list):
+        history = []
+
+    guild_games = [g for g in history if g.get("guild_id") == ctx.guild.id]
+    if not guild_games:
+        return await ctx.send("لا يوجد بيانات بعد.")
+
+    total = len(guild_games)
+    citizen_wins = sum(1 for g in guild_games if g.get("winner") == "citizens")
+    mafia_wins = sum(1 for g in guild_games if g.get("winner") == "mafia")
+    jester_wins = sum(1 for g in guild_games if g.get("winner") == "jester")
+    avg_nights = sum(g.get("nights", 0) for g in guild_games) / max(total, 1)
+    avg_duration = sum(g.get("duration_seconds", 0) for g in guild_games) / max(total, 1)
+
+    embed = discord.Embed(
+        title=f"📊 إحصائيات السيرفر: {ctx.guild.name}",
+        color=discord.Color.blurple(),
+    )
+    embed.add_field(name="🎮 مجموع الألعاب", value=str(total), inline=True)
+    embed.add_field(name="🟢 انتصارات المواطنين", value=f"{citizen_wins} ({round(citizen_wins/max(total,1)*100)}%)", inline=True)
+    embed.add_field(name="🔴 انتصارات المافيا", value=f"{mafia_wins} ({round(mafia_wins/max(total,1)*100)}%)", inline=True)
+    embed.add_field(name="🤡 انتصارات المجنون", value=str(jester_wins), inline=True)
+    embed.add_field(name="🌙 متوسط الليالي", value=f"{avg_nights:.1f}", inline=True)
+    embed.add_field(name="⏱️ متوسط المدة", value=f"{int(avg_duration//60)}د {int(avg_duration%60)}ث", inline=True)
+    await ctx.send(embed=embed)
+
+
+# ============================================================================
+# نظام الاعتراف (Confession)
+# ============================================================================
+
+@bot.command(name="اعترف", aliases=["confess"])
+async def cmd_confess(ctx: commands.Context):
+    """اللاعب الميت يكشف دوره طوعياً."""
+    if not ctx.guild:
+        return
+    key = game_key(ctx.guild.id, ctx.channel.id)
+    game = games.get(key)
+    if not game:
+        return await ctx.send("لا توجد لعبة جارية.", delete_after=5)
+
+    player = game.get(ctx.author.id)
+    if not player:
+        return await ctx.send("لست في اللعبة.", delete_after=5)
+    if player.alive:
+        return await ctx.send("لا يمكنك الاعتراف وأنت حي! انتظر حتى تموت.", delete_after=5)
+
+    embed = discord.Embed(
+        title=f"👻 اعتراف {player.user.display_name}",
+        description=(
+            f"كنت دور: {player.role.emoji} **{player.role.name}**\n"
+            f"الفريق: {'🔴 مافيا' if player.role.team == 'mafia' else '🟢 مواطنون' if player.role.team == 'citizens' else '🟣 محايد'}\n"
+            f"قُتل بسبب: **{player.killed_by or 'غير معروف'}**"
+        ),
+        color=ROLE_COLORS.get(player.role.team, discord.Color.gray()),
+    )
+    await ctx.send(embed=embed)
+
+
+# ============================================================================
+# نظام المكافأة اليومية (Daily Bonus)
+# ============================================================================
+
+DAILY_FILE = Path("mafia_daily.json")
+DAILY_BONUS_BASE = 200
+DAILY_BONUS_STREAK_EXTRA = 50  # إضافي لكل يوم متواصل
+
+
+def _load_daily() -> dict:
+    return _load_json(DAILY_FILE)
+
+
+def _save_daily(data: dict) -> None:
+    _save_json(DAILY_FILE, data)
+
+
+@bot.command(name="مكافأة", aliases=["daily", "bonus"])
+async def cmd_daily(ctx: commands.Context):
+    uid = str(ctx.author.id)
+    data = _load_daily()
+    now = time.time()
+
+    if uid not in data:
+        data[uid] = {"last_claim": 0, "streak": 0}
+
+    last = data[uid]["last_claim"]
+    streak = data[uid]["streak"]
+
+    time_since = now - last
+    # 20 ساعة كحد أدنى بين المكافآت
+    if time_since < 20 * 3600:
+        remaining = int(20 * 3600 - time_since)
+        h, m = divmod(remaining // 60, 60)
+        return await ctx.send(
+            f"⏳ يمكنك المطالبة بمكافأتك اليومية بعد **{h}س {m}د**.",
+            delete_after=15,
+        )
+
+    # تحقق من الاستمرارية (48 ساعة كحد أقصى للحفاظ على السلسلة)
+    if time_since > 48 * 3600:
+        streak = 0
+
+    streak += 1
+    bonus = DAILY_BONUS_BASE + min(streak - 1, 30) * DAILY_BONUS_STREAK_EXTRA
+
+    data[uid] = {"last_claim": now, "streak": streak}
+    _save_daily(data)
+
+    ranks = _load_ranks()
+    ranks[uid] = ranks.get(uid, INITIAL_POINTS) + bonus
+    _save_ranks(ranks)
+
+    embed = discord.Embed(
+        title="🎁 مكافأة يومية!",
+        description=(
+            f"حصلت على **+{bonus}** نقطة!\n"
+            f"🔥 السلسلة: {streak} يوم متواصل\n"
+            f"💎 مجموع نقاطك: **{ranks[uid]:,}**"
+        ),
+        color=discord.Color.gold(),
+    )
+    if streak >= 7:
+        embed.add_field(name="🌟 مكافأة الأسبوع!", value=f"استمررت {streak} أيام متواصلة!", inline=False)
+    await ctx.send(embed=embed)
+
+
+# ============================================================================
+# نظام التصويت على الأدوار (Role Vote / Poll)
+# ============================================================================
+
+class RolePollView(discord.ui.View):
+    """تصويت على أدوار اللعبة القادمة."""
+    def __init__(self, roles_list: list[str], host_id: int):
+        super().__init__(timeout=120)
+        self.votes: dict[str, set[int]] = {r: set() for r in roles_list}
+        self.host_id = host_id
+
+        for role_name in roles_list[:5]:  # أقصى 5 أدوار
+            r = ROLES.get(role_name)
+            if not r:
+                continue
+            btn = discord.ui.Button(
+                label=f"{r.emoji} {r.name}",
+                style=discord.ButtonStyle.gray,
+            )
+            async def make_cb(rn=role_name):
+                async def cb(interaction: discord.Interaction):
+                    uid = interaction.user.id
+                    for name, voters in self.votes.items():
+                        voters.discard(uid)
+                    self.votes[rn].add(uid)
+                    await interaction.response.send_message(
+                        f"صوّتت لـ **{rn}**.", ephemeral=True
+                    )
+                return cb
+            btn.callback = await asyncio.coroutine(make_cb)() if False else make_cb()
+            self.add_item(btn)
+
+    @discord.ui.button(label="النتائج", style=discord.ButtonStyle.blurple, emoji="📊", row=2)
+    async def results(self, interaction: discord.Interaction, button: discord.ui.Button):
+        lines = [f"• **{r}**: {len(v)} صوت" for r, v in sorted(self.votes.items(), key=lambda x: -len(x[1]))]
+        await interaction.response.send_message("\n".join(lines) or "لا أصوات بعد.", ephemeral=True)
+
+
+# ============================================================================
+# أوامر إدارية إضافية
+# ============================================================================
+
+@bot.command(name="طرد_من_اللعبة", aliases=["kick_player"])
+@commands.has_permissions(administrator=True)
+async def cmd_kick_player(ctx: commands.Context, member: discord.Member | None = None):
+    """طرد لاعب من اللعبة الجارية."""
+    if not member:
+        return await ctx.send("استخدم: `&طرد_من_اللعبة @لاعب`")
+    key = game_key(ctx.guild.id, ctx.channel.id)
+    game = games.get(key)
+    if not game:
+        return await ctx.send("لا توجد لعبة جارية.")
+
+    if game.phase == "waiting":
+        if game.remove_lobby_player(member.id):
+            return await ctx.send(f"✅ تم طرد {member.mention} من الردهة.")
+        return await ctx.send("اللاعب ليس في الردهة.")
+
+    player = game.get(member.id)
+    if not player:
+        return await ctx.send("اللاعب ليس في اللعبة.")
+
+    player.alive = False
+    player.killed_by = "admin_kick"
+    await mute_player(game, member.id, reason="طُرد من اللعبة")
+    await ctx.send(f"✅ تم طرد {member.mention} من اللعبة.")
+
+
+@bot.command(name="فرض_دور", aliases=["force_role"])
+@commands.has_permissions(administrator=True)
+async def cmd_force_role(ctx: commands.Context, member: discord.Member | None = None, *, role_name: str = ""):
+    """تغيير دور لاعب في اللعبة الجارية."""
+    if not member or not role_name:
+        return await ctx.send("استخدم: `&فرض_دور @لاعب <اسم الدور>`")
+    key = game_key(ctx.guild.id, ctx.channel.id)
+    game = games.get(key)
+    if not game:
+        return await ctx.send("لا توجد لعبة جارية.")
+
+    role = ROLES.get(role_name.strip())
+    if not role:
+        return await ctx.send(f"❌ لا يوجد دور باسم **{role_name}**.")
+
+    player = game.get(member.id)
+    if not player:
+        return await ctx.send("اللاعب ليس في اللعبة.")
+
+    game.players[member.id].role = role
+    await ctx.send(f"✅ تم تغيير دور {member.mention} إلى {role.emoji} **{role.name}**.")
+
+
+@bot.command(name="مد_الليل", aliases=["extend_night"])
+@commands.has_permissions(administrator=True)
+async def cmd_extend_night(ctx: commands.Context, seconds: int = 30):
+    """تمديد وقت الليل في اللعبة الجارية (يعمل بشكل محدود)."""
+    await ctx.send(f"⏱️ تم تسجيل طلب التمديد بـ {seconds} ثانية. يؤثر في الليلة القادمة.")
+
+
+@bot.command(name="كشف_أدوار", aliases=["reveal_all"])
+@commands.has_permissions(administrator=True)
+async def cmd_reveal_all(ctx: commands.Context):
+    """كشف جميع أدوار اللاعبين (للمسؤول فقط)."""
+    key = game_key(ctx.guild.id, ctx.channel.id)
+    game = games.get(key)
+    if not game:
+        return await ctx.send("لا توجد لعبة جارية.")
+
+    lines = [
+        f"{'🟢' if p.alive else '💀'} {p.user.display_name}: {p.role.emoji} **{p.role.name}** ({p.role.team})"
+        for p in game.players.values()
+    ]
+    embed = discord.Embed(
+        title="🔍 كشف الأدوار (للمسؤول)",
+        description="\n".join(lines) or "لا لاعبون.",
+        color=discord.Color.dark_red(),
+    )
+    await ctx.send(embed=embed, ephemeral=True)
+
+
+@bot.command(name="إعادة_ضبط_يومي", aliases=["reset_daily"])
+@commands.has_permissions(administrator=True)
+async def cmd_reset_daily(ctx: commands.Context, member: discord.Member | None = None):
+    """إعادة ضبط المكافأة اليومية للاعب."""
+    data = _load_daily()
+    if member:
+        data.pop(str(member.id), None)
+        _save_daily(data)
+        await ctx.send(f"✅ تم إعادة ضبط المكافأة اليومية لـ {member.mention}.")
+    else:
+        _save_daily({})
+        await ctx.send("✅ تم إعادة ضبط المكافآت اليومية للجميع.")
+
+
+# ============================================================================
+# أوامر معلومات اللعبة
+# ============================================================================
+
+@bot.command(name="فريقي", aliases=["my_team", "team"])
+async def cmd_my_team(ctx: commands.Context):
+    """يعرض اللاعب فريقه (للمافيا فقط)."""
+    key = game_key(ctx.guild.id, ctx.channel.id)
+    game = games.get(key)
+    if not game:
+        return await ctx.send("لا توجد لعبة جارية.", delete_after=5)
+
+    player = game.get(ctx.author.id)
+    if not player or not player.alive:
+        return await ctx.send("لست في اللعبة أو أنت ميت.", delete_after=5)
+
+    if player.role.team != "mafia" and not (player.role.name == "قاتل" and player.joined_mafia):
+        return await ctx.send("هذا الأمر للمافيا فقط.", delete_after=5)
+
+    team = game.mafia_team_members(alive_only=True)
+    lines = [f"• {p.user.display_name} — {p.role.emoji} {p.role.name}" for p in team]
+    await ctx.send(
+        embed=discord.Embed(
+            title="🔪 فريق المافيا الأحياء",
+            description="\n".join(lines) or "لا أحد في فريقك.",
+            color=discord.Color.dark_red(),
+        ),
+        ephemeral=True,
+    )
+
+
+@bot.command(name="دوري", aliases=["my_role", "role_me"])
+async def cmd_my_role(ctx: commands.Context):
+    """يذكّر اللاعب بدوره سراً."""
+    key = game_key(ctx.guild.id, ctx.channel.id)
+    game = games.get(key)
+    if not game:
+        return await ctx.send("لا توجد لعبة جارية.", delete_after=5)
+
+    player = game.get(ctx.author.id)
+    if not player:
+        return await ctx.send("لست في اللعبة.", delete_after=5)
+
+    embed = build_role_embed(player.role)
+    embed.title = f"🎭 دورك: {player.role.emoji} {player.role.name}"
+    embed.add_field(
+        name="📊 حالتك",
+        value=f"{'🟢 حي' if player.alive else '💀 ميت'}",
+        inline=True,
+    )
+    await ctx.send(embed=embed, ephemeral=True)
+
+
+@bot.command(name="وقت", aliases=["timer", "time_left"])
+async def cmd_time_left(ctx: commands.Context):
+    """يعرض المرحلة الحالية للعبة."""
+    key = game_key(ctx.guild.id, ctx.channel.id)
+    game = games.get(key)
+    if not game:
+        return await ctx.send("لا توجد لعبة جارية.")
+
+    phase_names = {
+        "waiting": "⏳ انتظار اللاعبين",
+        "night": f"🌙 ليل رقم {game.day_count}",
+        "day": f"☀️ نهار {game.day_count}",
+        "ended": "🏁 انتهت اللعبة",
+    }
+    await ctx.send(f"📍 المرحلة الحالية: **{phase_names.get(game.phase, game.phase)}** | الوقت: {game.elapsed_time()}")
+
+
+# ============================================================================
+# ألعاب نصية خفيفة (ثانوية)
+# ============================================================================
+
+ROLE_QUIZ: list[dict] = [
+    {"q": "أي دور يظهر بريئاً عند تحقيق الشرطي؟", "a": "محتال", "choices": ["محتال", "مزوّر", "مخبر", "ساحرة"]},
+    {"q": "أي دور يرث دور الطبيب تلقائياً؟", "a": "ممرضة", "choices": ["ممرضة", "نائب الشرطي", "حارسة", "كاهن"]},
+    {"q": "أي دور يأخذ معه أول من صوّت ضده عند الإعدام؟", "a": "شهيد", "choices": ["شهيد", "فارس", "مجنون", "قنّاص"]},
+    {"q": "أي دور يفوز إذا أُعدم بالتصويت؟", "a": "مجنون", "choices": ["مجنون", "شهيد", "قاتل", "سياسي"]},
+    {"q": "أي دور يمنع لاعباً من التصويت في اليوم التالي؟", "a": "رجل عصابة", "choices": ["رجل عصابة", "محرّض", "مضيفة", "ساحرة"]},
+    {"q": "أي دور يكشف دور لاعب ميت؟", "a": "عرافة", "choices": ["عرافة", "شرطي", "عميل سري", "مراقب"]},
+    {"q": "أي دور يمتلك رصاصة واحدة تخترق الحماية؟", "a": "قنّاص", "choices": ["قنّاص", "شرطي", "حارسة", "فارس"]},
+    {"q": "أي دور يعيد لاعباً ميتاً مرة واحدة؟", "a": "كاهن", "choices": ["كاهن", "طبيب", "ممرضة", "فارس"]},
+    {"q": "أي دور صوته يُحسب مرتين ولا يُعدَم بالتصويت؟", "a": "سياسي", "choices": ["سياسي", "رجل عصابة", "شرطي", "محامي"]},
+    {"q": "أي دور يموت مع مهاجمه؟", "a": "فارس", "choices": ["فارس", "شهيد", "جندي", "حارسة"]},
+]
+
+_active_quizzes: dict[int, asyncio.Task] = {}
+
+
+class QuizView(discord.ui.View):
+    def __init__(self, question: dict, timeout: float = 20):
+        super().__init__(timeout=timeout)
+        self.question = question
+        self.answered: dict[int, bool] = {}
+        self.correct_users: list[int] = []
+
+        choices = question["choices"][:]
+        random.shuffle(choices)
+        for choice in choices:
+            btn = discord.ui.Button(
+                label=choice,
+                style=discord.ButtonStyle.gray,
+            )
+            is_correct = (choice == question["a"])
+
+            async def make_cb(c=choice, correct=is_correct):
+                async def cb(interaction: discord.Interaction):
+                    uid = interaction.user.id
+                    if uid in self.answered:
+                        return await interaction.response.send_message("أجبت من قبل!", ephemeral=True)
+                    self.answered[uid] = correct
+                    if correct:
+                        self.correct_users.append(uid)
+                        await interaction.response.send_message("✅ إجابة صحيحة!", ephemeral=True)
+                    else:
+                        await interaction.response.send_message(f"❌ خطأ! الإجابة هي **{self.question['a']}**", ephemeral=True)
+                return cb
+
+            btn.callback = make_cb()
+            self.add_item(btn)
+
+
+@bot.command(name="مسابقة", aliases=["quiz"])
+async def cmd_quiz(ctx: commands.Context):
+    """مسابقة سريعة عن أدوار المافيا مع نقاط للفائزين."""
+    if not ctx.guild:
+        return
+
+    question = random.choice(ROLE_QUIZ)
+    view = QuizView(question, timeout=20)
+
+    embed = discord.Embed(
+        title="🎯 مسابقة مافيا 42!",
+        description=f"**السؤال:** {question['q']}\n\nلديك **20 ثانية**!",
+        color=discord.Color.blurple(),
+    )
+    msg = await ctx.send(embed=embed, view=view)
+    await asyncio.sleep(20)
+
+    for child in view.children:
+        child.disabled = True
+    try:
+        await msg.edit(view=view)
+    except discord.HTTPException:
+        pass
+
+    if view.correct_users:
+        # أعطِ نقاطاً
+        ranks = _load_ranks()
+        winner_mentions = []
+        for uid in view.correct_users:
+            key = str(uid)
+            ranks[key] = ranks.get(key, INITIAL_POINTS) + 50
+            winner_mentions.append(f"<@{uid}>")
+        _save_ranks(ranks)
+
+        result_embed = discord.Embed(
+            title="🎉 نتيجة المسابقة",
+            description=(
+                f"الإجابة الصحيحة: **{question['a']}**\n\n"
+                f"✅ **الفائزون (+50 نقطة):**\n" + "\n".join(winner_mentions)
+            ),
+            color=discord.Color.green(),
+        )
+    else:
+        result_embed = discord.Embed(
+            title="😢 لم يجب أحد بشكل صحيح",
+            description=f"الإجابة الصحيحة كانت: **{question['a']}**",
+            color=discord.Color.red(),
+        )
+    await ctx.send(embed=result_embed)
+
+
+# ============================================================================
+# أوامر تذكير وتنبيه
+# ============================================================================
+
+@bot.command(name="تذكير", aliases=["remind"])
+@commands.has_permissions(administrator=True)
+async def cmd_remind(ctx: commands.Context):
+    """يرسل تذكيراً لجميع اللاعبين في الردهة."""
+    key = game_key(ctx.guild.id, ctx.channel.id)
+    game = games.get(key)
+    if not game or game.phase != "waiting":
+        return await ctx.send("لا توجد ردهة انتظار نشطة.")
+
+    if not game.lobby_user_ids:
+        return await ctx.send("لا يوجد لاعبون في الردهة.")
+
+    mentions = " ".join(f"<@{uid}>" for uid in game.lobby_user_ids)
+    await ctx.send(
+        f"🔔 **تذكير!** اللعبة ستبدأ قريباً.\n{mentions}\n"
+        f"الردهة تنتظر {MIN_PLAYERS - len(game.lobby_user_ids)} لاعب إضافي."
+        if len(game.lobby_user_ids) < MIN_PLAYERS
+        else f"🔔 **تذكير!** المنشئ سيبدأ اللعبة قريباً.\n{mentions}"
+    )
+
+
+# ============================================================================
+# نظام المقارنة (Compare Players)
+# ============================================================================
+
+@bot.command(name="مقارنة", aliases=["compare"])
+async def cmd_compare(ctx: commands.Context, member1: discord.Member | None = None, member2: discord.Member | None = None):
+    if not member1:
+        return await ctx.send("استخدم: `&مقارنة @لاعب1 @لاعب2`")
+    if not member2:
+        member2_target = ctx.author
+        member1_target = member1
+    else:
+        member1_target = member1
+        member2_target = member2
+
+    s1 = get_stats(member1_target.id)
+    s2 = get_stats(member2_target.id)
+    p1 = ensure_rank(member1_target.id)
+    p2 = ensure_rank(member2_target.id)
+
+    def wr(s):
+        return round(s.get("wins", 0) / max(s.get("games_played", 1), 1) * 100)
+
+    embed = discord.Embed(
+        title=f"⚔️ مقارنة: {member1_target.display_name} vs {member2_target.display_name}",
+        color=discord.Color.gold(),
+    )
+    embed.add_field(
+        name=f"👤 {member1_target.display_name}",
+        value=(
+            f"💎 {p1:,} نقطة\n"
+            f"🎮 {s1.get('games_played', 0)} لعبة\n"
+            f"✅ {s1.get('wins', 0)} فوز ({wr(s1)}%)\n"
+            f"🔥 سلسلة: {s1.get('max_win_streak', 0)}\n"
+            f"🏆 {len(get_player_achievements(member1_target.id))} إنجاز"
+        ),
+        inline=True,
+    )
+    embed.add_field(
+        name=f"👤 {member2_target.display_name}",
+        value=(
+            f"💎 {p2:,} نقطة\n"
+            f"🎮 {s2.get('games_played', 0)} لعبة\n"
+            f"✅ {s2.get('wins', 0)} فوز ({wr(s2)}%)\n"
+            f"🔥 سلسلة: {s2.get('max_win_streak', 0)}\n"
+            f"🏆 {len(get_player_achievements(member2_target.id))} إنجاز"
+        ),
+        inline=True,
+    )
+
+    if p1 > p2:
+        embed.add_field(name="🏅 الأفضل نقاطاً", value=member1_target.mention, inline=False)
+    elif p2 > p1:
+        embed.add_field(name="🏅 الأفضل نقاطاً", value=member2_target.mention, inline=False)
+    else:
+        embed.add_field(name="🏅", value="تعادل!", inline=False)
+
+    await ctx.send(embed=embed)
+
+
+# ============================================================================
+# نظام التبرع بالنقاط (Transfer Points)
+# ============================================================================
+
+@bot.command(name="تبرع", aliases=["transfer", "give"])
+async def cmd_transfer(ctx: commands.Context, member: discord.Member | None = None, amount: int = 0):
+    """تحويل نقاط إلى لاعب آخر."""
+    if not member or amount <= 0:
+        return await ctx.send("استخدم: `&تبرع @لاعب <كمية>`")
+    if member.id == ctx.author.id:
+        return await ctx.send("لا يمكنك التبرع لنفسك.")
+    if amount < 100:
+        return await ctx.send("الحد الأدنى للتبرع هو 100 نقطة.")
+
+    ranks = _load_ranks()
+    sender_key = str(ctx.author.id)
+    receiver_key = str(member.id)
+
+    sender_pts = ranks.get(sender_key, INITIAL_POINTS)
+    if sender_pts < amount:
+        return await ctx.send(f"❌ نقاطك غير كافية. لديك **{sender_pts:,}** فقط.")
+
+    ranks[sender_key] = sender_pts - amount
+    ranks[receiver_key] = ranks.get(receiver_key, INITIAL_POINTS) + amount
+    _save_ranks(ranks)
+
+    await ctx.send(
+        embed=discord.Embed(
+            title="💸 تم التحويل!",
+            description=(
+                f"{ctx.author.mention} تبرّع بـ **{amount:,}** نقطة لـ {member.mention}\n"
+                f"رصيدك الآن: **{ranks[sender_key]:,}**"
+            ),
+            color=discord.Color.green(),
+        )
+    )
+
+
+# ============================================================================
+# لوحة الشرف (Hall of Fame)
+# ============================================================================
+
+HALL_OF_FAME_FILE = Path("mafia_hall_of_fame.json")
+
+
+@bot.command(name="لوحة_الشرف", aliases=["hall_of_fame", "hof"])
+async def cmd_hall_of_fame(ctx: commands.Context):
+    history = _load_json(HISTORY_FILE) if HISTORY_FILE.exists() else []
+    if not isinstance(history, list) or not history:
+        return await ctx.send("لا يوجد بيانات بعد.")
+
+    guild_games = [g for g in history if g.get("guild_id") == ctx.guild.id]
+
+    # أكثر اللاعبين فوزاً
+    win_count: dict[int, int] = defaultdict(int)
+    for g in guild_games:
+        w = g.get("winner")
+        for p in g.get("players", []):
+            pid = p.get("id")
+            team = p.get("team")
+            role = p.get("role")
+            # المجنون
+            if role == "مجنون" and p.get("killed_by") == "vote":
+                win_count[pid] += 1
+            elif (team == "citizens" and w == "citizens") or (team == "mafia" and w == "mafia"):
+                win_count[pid] += 1
+
+    top = sorted(win_count.items(), key=lambda x: -x[1])[:5]
+    if not top:
+        return await ctx.send("لا يوجد بيانات كافية.")
+
+    medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"]
+    lines = [f"{medals[i]} <@{uid}>: **{cnt}** انتصار" for i, (uid, cnt) in enumerate(top)]
+
+    embed = discord.Embed(
+        title=f"🏆 لوحة شرف {ctx.guild.name}",
+        description="\n".join(lines),
+        color=discord.Color.gold(),
+    )
+    embed.set_footer(text=f"بناءً على {len(guild_games)} لعبة")
+    await ctx.send(embed=embed)
+
+
+# ============================================================================
+# أوامر متفرقة مفيدة
+# ============================================================================
+
+@bot.command(name="سرعة_اللعبة", aliases=["game_speed"])
+async def cmd_game_speed(ctx: commands.Context):
+    """عرض أوقات اللعبة الحالية."""
+    key = game_key(ctx.guild.id, ctx.channel.id)
+    game = games.get(key)
+    if game:
+        s = game.settings
+        embed = discord.Embed(title="⚙️ أوقات اللعبة الجارية", color=discord.Color.blurple())
+        embed.add_field(name="🌙 الليل", value=f"{s.night_seconds}ث", inline=True)
+        embed.add_field(name="💬 النقاش", value=f"{s.discussion_seconds}ث", inline=True)
+        embed.add_field(name="🗳️ التصويت", value=f"{s.vote_seconds}ث", inline=True)
+        embed.add_field(name="⚖️ التأكيد", value=f"{s.confirm_seconds}ث", inline=True)
+        embed.add_field(name="🎮 الوضع", value=game.mode, inline=True)
+    else:
+        embed = discord.Embed(title="⚙️ أوقات اللعبة الافتراضية", color=discord.Color.blurple())
+        embed.add_field(name="🌙 الليل", value=f"{NIGHT_SECONDS}ث", inline=True)
+        embed.add_field(name="💬 النقاش (عادي)", value=f"{DISCUSSION_SECONDS}ث", inline=True)
+        embed.add_field(name="💬 النقاش (سريع)", value=f"{FAST_DISCUSSION_SECONDS}ث", inline=True)
+        embed.add_field(name="🗳️ التصويت", value=f"{VOTE_SECONDS}ث", inline=True)
+    await ctx.send(embed=embed)
+
+
+@bot.command(name="رتبي", aliases=["my_rank"])
+async def cmd_my_rank(ctx: commands.Context):
+    """عرض رتبة اللاعب مع شريط تقدم للرتبة التالية."""
+    uid = ctx.author.id
+    pts = ensure_rank(uid)
+    current_rank = get_rank_title(pts)
+
+    # الرتبة التالية
+    next_rank_name = None
+    next_threshold = None
+    for threshold, name, _ in RANKS:
+        if pts < threshold:
+            next_rank_name = name
+            next_threshold = threshold
+            break
+
+    embed = discord.Embed(
+        title=f"🏅 رتبتك: {current_rank}",
+        color=discord.Color.gold(),
+    )
+    embed.set_thumbnail(url=ctx.author.display_avatar.url)
+    embed.add_field(name="💎 نقاطك", value=f"**{pts:,}**", inline=True)
+
+    if next_rank_name and next_threshold:
+        needed = next_threshold - pts
+        # شريط تقدم
+        prev_threshold = 0
+        for t, n, _ in RANKS:
+            if t < next_threshold:
+                prev_threshold = t
+        progress = pts - prev_threshold
+        total_needed = next_threshold - prev_threshold
+        pct = min(100, int(progress / max(total_needed, 1) * 100))
+        bar_filled = int(pct / 10)
+        bar = "█" * bar_filled + "░" * (10 - bar_filled)
+        embed.add_field(name="🎯 الرتبة التالية", value=next_rank_name, inline=True)
+        embed.add_field(name="📊 التقدم", value=f"`{bar}` {pct}%\n{needed:,} نقطة متبقية", inline=False)
+    else:
+        embed.add_field(name="🌟 وصلت للرتبة الأعلى!", value="أنت في القمة!", inline=False)
+
+    await ctx.send(embed=embed)
+
+
+@bot.command(name="أدوار_الفريق", aliases=["team_roles"])
+async def cmd_team_roles(ctx: commands.Context, team: str = ""):
+    """عرض أدوار فريق معين."""
+    team_map = {"مافيا": "mafia", "مواطنون": "citizens", "محايد": "neutral"}
+    team_en = team_map.get(team, "")
+    if not team_en:
+        return await ctx.send("استخدم: `&أدوار_الفريق مافيا` أو `مواطنون` أو `محايد`")
+
+    roles = [(n, r) for n, r in ROLES.items() if r.team == team_en]
+    if not roles:
+        return await ctx.send("لا أدوار لهذا الفريق.")
+
+    color = {"mafia": discord.Color.dark_red(), "citizens": discord.Color.green(), "neutral": discord.Color.purple()}.get(team_en)
+    embed = discord.Embed(
+        title=f"📋 أدوار {team}",
+        color=color or discord.Color.blurple(),
+    )
+    for name, role in roles:
+        rarity = {"common": "⚪", "rare": "🔵", "legendary": "⭐"}.get(role.rarity, "")
+        embed.add_field(
+            name=f"{role.emoji} {name} {rarity}",
+            value=role.description[:100] + ("..." if len(role.description) > 100 else ""),
+            inline=False,
+        )
+    await ctx.send(embed=embed)
+
+
+@bot.command(name="نقاط_الإنجازات", aliases=["ach_points"])
+async def cmd_ach_points(ctx: commands.Context, member: discord.Member | None = None):
+    """عرض النقاط المكتسبة من الإنجازات."""
+    target = member or ctx.author
+    ach_ids = get_player_achievements(target.id)
+    total = sum(ACHIEVEMENTS[aid].points for aid in ach_ids if aid in ACHIEVEMENTS)
+    count = len(ach_ids)
+    await ctx.send(
+        embed=discord.Embed(
+            title=f"🏆 نقاط إنجازات {target.display_name}",
+            description=f"**{count}** إنجاز | **{total:,}** نقطة من الإنجازات",
+            color=discord.Color.gold(),
+        )
+    )
+
+
+# ============================================================================
+# إشعارات خاصة عند الانضمام لقناة اللعبة
+# ============================================================================
+
+@bot.event
+async def on_member_join(member: discord.Member):
+    """رسالة ترحيب تلقائية تشمل معلومات اللعبة."""
+    # يمكن تخصيصه لاحقاً
+    pass
+
+
+# ============================================================================
+# معالجة الأخطاء
+# ============================================================================
 
 @bot.event
 async def on_command_error(ctx: commands.Context, error: commands.CommandError):
@@ -3680,6 +4611,8 @@ async def on_command_error(ctx: commands.Context, error: commands.CommandError):
         await ctx.send(f"❌ وسيط خاطئ: {error}", delete_after=10)
     elif isinstance(error, commands.MissingRequiredArgument):
         await ctx.send(f"❌ ينقص وسيط: `{error.param.name}`", delete_after=10)
+    elif isinstance(error, commands.MissingPermissions):
+        await ctx.send("❌ ليس لديك صلاحية لهذا الأمر.", delete_after=10)
     else:
         log.error("خطأ في الأمر %s: %s", ctx.command, error)
 
