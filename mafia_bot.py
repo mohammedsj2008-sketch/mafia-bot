@@ -3399,6 +3399,20 @@ async def cmd_leaderboard(ctx: commands.Context):
     await ctx.send(embed=embed)
 
 
+@bot.command(name="باكب", aliases=["backup"])
+@commands.has_permissions(administrator=True)
+async def cmd_backup(ctx: commands.Context):
+    ranks_path = Path("mafia_ranks.json")
+    allowed_path = Path("mafia_allowed_channels.json")
+    if not ranks_path.exists() and not allowed_path.exists():
+        return await ctx.send("لا توجد ملفات باكب حالياً.")
+    files = []
+    for path in (ranks_path, allowed_path):
+        if path.exists():
+            files.append(discord.File(str(path)))
+    await ctx.send("✅ هذه نسخة احتياطية للملفات المطلوبة.", files=files)
+
+
 @bot.command(name="إحصائيات", aliases=["احصائيات", "stats"])
 async def cmd_stats(ctx: commands.Context, member: discord.Member | None = None):
     target = member or ctx.author
