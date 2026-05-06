@@ -3755,3 +3755,28 @@ from mafia_game import MafiaGame
 
 game = MafiaGame()
 game.start()
+
+import discord
+from discord.ext import commands
+
+class XS_OO(commands.Cog):
+    def __init__(self, bot):
+        self.bot = bot
+
+    @commands.command()
+    async def start_game(self, ctx):
+        # Implement game start logic here
+        await ctx.send("Game started!")
+
+    @commands.command()
+    async def join_game(self, ctx):
+        # Implement game join logic here
+        await ctx.send("You joined the game!")
+
+    @commands.command()
+    async def leave_game(self, ctx):
+        # Implement game leave logic here
+        await ctx.send("You left the game!")
+
+# Add the cog to the bot
+bot.add_cog(XS_OO(bot)) 
