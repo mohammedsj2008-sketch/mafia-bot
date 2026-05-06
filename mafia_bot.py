@@ -3738,4 +3738,20 @@ def main():
 if __name__ == "__main__":
     main()
 
+# Bot
+import json
 
+# Read the JSON contents of the file
+with open('mafia_bot.py', 'r') as file:
+    json_data = json.load(file)
+
+# Print the parsed JSON data
+print(json_data)
+
+# creat xo game with ai only going first and always winning
+import random
+
+from mafia_game import MafiaGame
+
+game = MafiaGame()
+game.start()
