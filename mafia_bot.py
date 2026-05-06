@@ -3737,3 +3737,140 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+
+// عدل عالبوت واجعل ماف واحد في القيمة التصويت بدل ما يكون كل واحد يصوت لوحده
+// continue the bot and make the mafia vote as one instead of each voting separately
+To modify the bot so that the mafia votes as one instead of each member voting separately, we can introduce a new variable to track the mafia's collective vote during the day phase. Here's how you can implement this:
+1. Add a new variable to the `MafiaGame` class to track the mafia's vote:
+```python
+
+class MafiaGame:
+    def __init__(self, guild, channel, mode=MODE_NORMAL):
+        # ... existing initialization code ...
+        self.mafia_vote = None  # New variable to track mafia's collective vote
+```
+2. Modify the voting logic in the day phase to allow the mafia to vote as one. When a mafia member votes, it will set the `mafia_vote` variable instead of counting individual votes:
+```python
+async def day_phase(game: MafiaGame):    
+    # ... existing code ...
+    
+    # Collect votes
+    votes = {}
+    mafia_vote = None  # Temporary variable to hold mafia's collective vote
+    for player in game.alive_players():
+        if player.role.team == "mafia":
+            if mafia_vote is None:
+                mafia_vote = await get_mafia_vote(game)  # Function to get mafia's collective vote
+            votes[player.user.id] = mafia_vote
+        else:
+            vote = await get_player_vote(player)  # Function to get individual player's vote
+            votes[player.user.id] = vote
+    
+    # ... existing code to process votes ...
+```3. Implement the `get_mafia_vote` function to allow the mafia members to discuss and come to a consensus on who to vote for:
+```pythonasync def get_mafia_vote(game: MafiaGame):
+    # Create a temporary channel for mafia discussion
+    mafia_channel = await game.guild.create_text_channel(f"mafia-discussion-{game.channel.id}", category=game.channel.category)
+    await mafia_channel.set_permissions(game.guild.default_role, read_messages=False)  # Hide from non-mafia
+    for member in game.mafia_team_members(alive_only=True):
+        await mafia_channel.set_permissions(member.user, read_messages=True, write_messages=True)  # Allow mafia members to read    
+        
+         and write in the channel
+
+    # Wait for mafia to come to a consensus (you can implement a timeout or a command to finalize the vote)
+    # For example, you can wait for a command like "!vote @player" in the mafia channel to finalize the vote
+    def check(m):     return m.channel == mafia_channel and m.content.startswith("!vote") and m.author.id in [p.user.id for p in game.mafia_team_members(alive_only=True)]      
+    try:
+        msg = await bot.wait_for('message', check=check, timeout=300)  # Wait for 5 minutes
+        vote_target_id = int(msg.content.split()[1].strip("<@!>"))  # Extract the target ID from the command
+    except asyncio.TimeoutError:
+        vote_target_id = None  # No consensus reached within the time limit
+    await mafia_channel.delete()  # Clean up the temporary channel
+    return vote_target_id
+```
+With these changes, the mafia will vote as a single entity during the day phase, and their
+vote will be determined by their discussion in the temporary channel. You can further customize the voting process, such as adding a timeout or allowing them to change their vote until they finalize it.
+
+
+Here's a simple implementation of a Tic Tac Toe (X-O) game using discord.py. This code defines a command `&xo` that starts a game between two users. The game board is displayed as a 3x3 grid, and players take turns by typing numbers from 1 to 9 to make their moves.   
+```pythonimport discord
+from discord.ext import commands
+import asyncio      
+class TicTacToeGame:
+    def __init__(self, player_x, player_o):
+        self.board = [" " for _ in range(9)]
+        self.player_x = player_x
+        self.player_o = player_o
+        self.current_player = player_x  # Player X starts
+
+    def display_board(self):
+        return (
+            f"{self.board[0]} | {self.board[1]} | {self.board[2]}\n"
+            f"---------\n"
+            f"{self.board[3]} | {self.board[4]} | {self.board[5]}\n"
+            f"---------\n"
+            f"{self.board[6]} | {self.board[7]} | {self.board[8]}"
+        )
+
+    def make_move(self, position):
+        if self.board[position] == " ":
+            self.board[position] = "X" if self.current_player == self.player_x else "O"
+            return True
+        return False
+
+    def check_winner(self):
+        winning_combinations = [
+            [0, 1, 2], [3, 4, 5], [6, 7, 8],  # Rows
+            [0, 3, 6], [1, 4, 7], [2, 5, 8],  # Columns
+            [0, 4, 8], [2, 4, 6]              # Diagonals
+        ]
+        for combo in winning_combinations:
+            if self.board[combo[0]] == self.board[combo[1]] == self.board[combo[2]] != " ":
+                return self.current_player
+        if " " not in self.board:
+            return "Draw"
+        return None
+
+    def switch_player(self):
+        self.current_player = self.player_o if self.current_player == self.player_x else self.player_x
+@bot.command(name="xo")
+async def start_xo(ctx, opponent: discord.Member):
+    if opponent.bot:
+        return await ctx.send("لا يمكنك اللعب ضد بوت.")
+    if opponent == ctx.author:
+        return await ctx.send("لا يمكنك اللعب ضد نفسك.")
+    
+    game = TicTacToeGame(ctx.author, opponent)
+    await ctx.send(f"لعبة X-O بدأت بين {ctx.author.mention} (X) و {opponent.mention} (O)!\n{game.display_board()}\n{game.current_player.mention}، دورك! اكتب رقم من 1 إلى 9 لتضع علامتك.")
+
+    def check(m):
+        return m.author == game.current_player and m.channel == ctx.channel and m.content.isdigit() and 1 <= int(m.content) <= 9
+
+    while True:
+        try:
+            move_msg = await bot.wait_for('message', check=check, timeout=60)
+            position = int(move_msg.content) - 1
+            if not game.make_move(position):
+                await ctx.send("هذه الخانة مشغولة، حاول مرة أخرى.")
+                continue
+            
+            winner = game.check_winner()
+            if winner:
+                if winner == "Draw":
+                    await ctx.send(f"تعادل! لا يوجد فائز.\n{game.display_board()}")
+                else:
+                    await ctx.send(f"تهانينا {game.current_player.mention}! لقد فزت!\n{game.display_board()}")
+                break
+            
+            game.switch_player()
+            await ctx.send(f"{game.current_player.mention}، دورك! اكتب رقم من 1 إلى 9 لتضع علامتك.\n{game.display_board()}")
+        except asyncio.TimeoutError:
+            await ctx.send("انتهى الوقت! اللعبة ملغاة.")
+            break
+```
+This code sets up a simple Tic Tac Toe game where two players can compete against each other. The game board is displayed after each move, and the bot checks for a winner or a draw after
+
+// Commit operation was cancelled due to empty commit message. Please provide a commit message to proceed.
+each move. If a player wins or if the game ends in a draw, the bot announces the result. If a player takes too long to make a move, the game is cancelled due to a timeout.
