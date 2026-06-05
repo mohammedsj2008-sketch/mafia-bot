@@ -43,6 +43,8 @@ ALLOWED_CHANNELS_FILE = DATA_DIR / "mafia_allowed_channels.json"
 STATS_FILE = DATA_DIR / "mafia_stats.json"
 ACHIEVEMENTS_FILE = DATA_DIR / "mafia_achievements.json"
 HISTORY_FILE = DATA_DIR / "mafia_history.json"
+CHALLENGES_FILE = DATA_DIR / "mafia_challenges.json"
+ELO_FILE = DATA_DIR / "mafia_elo.json"
 
 logging.basicConfig(
     level=logging.INFO,
@@ -149,6 +151,91 @@ ROLES: dict[str, Role] = {
 
 
 # ============================================================================
+# رسائل موت متنوعة حسب طريقة القتل
+# ============================================================================
+DEATH_MESSAGES: dict[str, list[str]] = {
+    "vote": [
+        "🗳️ صوّت الأغلبية على {target}. رحل عن عالمنا بسلام.",
+        "⚖️ العدالة انتصرت. {target} أُعدم بالتصويت.",
+        "📜 الحكم صدر. {target} ودع العالم بكرامة.",
+        "🔥 الغضب الشعبي ابتلع {target}.",
+    ],
+    "mafia": [
+        "🔪 سحبت المافيا خيوطها في الظلام. {target} وجد حتفه.",
+        "🌑 في جوف الليل، تسلل القاتل. {target} لم يسمع خطواته.",
+        "🗡️ سكين حادة وصمت مطبق. {target} رحل.",
+        "🩸 دماء {target} تلطخت بالظلام.",
+    ],
+    "sniper": [
+        "🔫 طلقة واحدة دوّت في الظلام. {target} سقط.",
+        "🎯 مقتل {target} بطلقة محققة.",
+        "💥 صوت فتح النار يهز الحي. {target} سقط.",
+    ],
+    "lover_death": [
+        "💔 انكسر قلب العاشق. {target} مات مع حبيبه.",
+        "💕 لا حياة بدون حبيب. {target} رحل مع عشقه.",
+        "🥀 الذبول أصاب {target} مع فراق عشقه.",
+    ],
+    "cult": [
+        "⛧ الطائفة ابتعت {target}. صار واحداً منهم.",
+        "🕯️ شموع الطائفة أضاءت لـ {target}.",
+    ],
+}
+
+
+# ============================================================================
+# نصائح استراتيجية لكل دور
+# ============================================================================
+ROLE_TIPS: dict[str, list[str]] = {
+    "رئيس_المافيا": ["لا تُعلن عن نفسك مبكراً.", "اختر أهدافك بحكمة — قتك تُخسر المافيا.", "استخدم صوتك المضاعف في التصويت."],
+    "العميل": ["أظهر للشرطي كمحقق — سيخدعه.", "ادعَ أنك تحقق في المافيا."],
+    "المُنفّذ": ["استخدم ضربتك القاتلة في الوقت المناسب.", "لا تستعجل — اختر هدفاً يقلب اللعبة."],
+    "المحتال": ["ادعَ أنك أي دور آخر.", "القنّاص لا يقتلك — استخدم ذلك."],
+    "الجاسوسة": ["تحققي في اللاعبين المشبوهين.", "لا تُعلني نتائجك في الشات العام."],
+    "المضيفة": ["الإغواء في التصويت يقلب نتائج اليوم.", "اختاري الهدف بحكمة."],
+    "اللص": ["اسرق دوراً قوياً عند موته.", "السرقة تعطيك معلومات قيّمة."],
+    "الرجل_الوحش": ["إذا هجمت وماتت، ستُفترس.", "التعرف على المافيا يعطيك ميزة."],
+    "الشرطي": ["لا تُعلن عن نفسك إلا إذا كنت واثقاً.", "تحقّق في اللاعبين الصامتين أولاً."],
+    "القنّاص": ["رصاصة واحدة — اختر الوقت بحكمة.", "هدفك يجب أن يكون المشبوه الأكثر."],
+    "الطبيب": ["غيّر أهدافك كل ليلة.", "لا تحمي نفسك ليلتين متتاليتين."],
+    "الممرضة": ["احمِ اللاعبين المهمين.", "لا تُعلني عن نفسك."],
+    "الجندي": ["استخدم درعك في اللحظة المناسبة.", "ادعَ أنك أي دور آخر."],
+    "الروحي": ["سترى مافيا في الليلة الأولى — تتبعه.", "المعلومات قيّمة، لا تُضيعها."],
+    "الغول": ["عند موتك، اختر من يموت معك.", "لا تكشف دورك مبكراً."],
+    "الشهد": ["عند موتك ستُكشف — استخدمه لصالحك.", "ادعَ دوراً لجذب الانتباه."],
+    "الكاهن": ["إذا هاجم المافيا هدفك، ستكشفهم.", "استخدم المعلومات في التصويت."],
+    "الزعيم": ["موتك يخسر المافيا — احذر.", "ادعَ دوراً ضعيفاً."],
+    "الساحر": ["بدّل أدوار اللاعبين في الوقت المناسب.", "التبديل يقلب اللعبة."],
+    "الهاكر": ["الليلتان 2 و 4 تعطيك نتائج دقيقة.", "استخدمها لصالحك."],
+    "القاضي": ["اعرف نتائج تحقيقات النهار.", "شارك المعلومات مع الفريق."],
+    "النبي": ["إذا بقيت حياً، المافيا لا تفوز نهاراً.", "بقياتك تحمي الفريق."],
+    "المعالج_النفسي": ["اعرف حالة اللاعبين — مهاجم أو سليم.", "شارك المعلومات."],
+    "المرتزق": ["اقبل رشوة المافيا بحكمة.", "الجانبان يفيدانك."],
+    "المسؤول": ["موتك يكشف أدوار المافيا كلها.", "ادعَ دوراً آمناً."],
+    "زعيم_الطائفة": ["تجنيدك في الليالي الفردية.", "اختر أعضاء بحكمة."],
+    "المتعصب": ["ابحث عن زعيم الطائفة.", "إذا وجدته، ستصبح واحداً منهم."],
+    "العاشق": ["حافظ على حبيبك — موتك يقتله.", "إذا بقيتما آخر اثنين، تفوزان."],
+}
+
+
+# ============================================================================
+# تحديات يومية
+# ============================================================================
+DAILY_CHALLENGES: list[dict[str, Any]] = [
+    {"id": "win_mafia", "name": "العودة الظلامة", "description": "افوز كمافيا", "team": "mafia", "reward": 50},
+    {"id": "win_citizen", "name": "بطل الشعب", "description": "افوز كمواطن", "team": "citizens", "reward": 40},
+    {"id": "survive", "name": "الناجي", "description": "ابقَ حياً حتى نهاية اللعبة", "team": "any", "reward": 20},
+    {"id": "kill_mafia", "name": "صياد المافيا", "description": "اقتل لاعباً من المافيا (قنّاص)", "role": "القنّاص", "reward": 60},
+    {"id": "heal_target", "name": "المخلص", "description": "احمِ لاعباً كان سيُقتل (طبيب)", "role": "الطبيب", "reward": 30},
+    {"id": "vote_eliminate", "name": "الحكم", "description": "ساهم في إعدام لاعب بالتصويت", "team": "any", "reward": 25},
+    {"id": "cult_leader_win", "name": "زعيم الطائفة", "description": "افوز كزعيم طائفة", "role": "زعيم_الطائفة", "reward": 70},
+    {"id": "lovers_win", "name": "قصة حب", "description": "افوز كلعاشقين", "role": "العاشق", "reward": 80},
+    {"id": "sheriff_catch", "name": "المحقق", "description": "اكشف عضو مافيا بالتحقيق", "role": "الشرطي", "reward": 50},
+    {"id": "three_games", "name": "المنتظم", "description": "العب 3 ألعاب اليوم", "team": "any", "reward": 30},
+]
+
+
+# ============================================================================
 # الإنجازات
 # ============================================================================
 @dataclass(frozen=True)
@@ -194,6 +281,8 @@ class PlayerState:
     sniper_used: bool = False
     night_action_target: Optional[int] = None
     day_vote_target: Optional[int] = None
+    night_action_taken: bool = False
+    afk_warns: int = 0
 
 
 @dataclass
@@ -296,6 +385,181 @@ def unlock_achievement(user_id: int, ach_id: str) -> bool:
     achs.setdefault(user_key, []).append(ach_id)
     _save_json(ACHIEVEMENTS_FILE, achs)
     return True
+
+
+# ============================================================================
+# نظام ELO
+# ============================================================================
+def _load_elo() -> dict[str, dict]:
+    return _load_json(ELO_FILE, {})
+
+
+def _save_elo(data: dict[str, dict]) -> None:
+    _save_json(ELO_FILE, data)
+
+
+def get_elo(user_id: int) -> int:
+    elo_data = _load_elo()
+    return elo_data.get(str(user_id), {}).get("elo", 1000)
+
+
+def get_elo_title(elo: int) -> str:
+    if elo >= 2000: return "🏆 أسطوري"
+    if elo >= 1800: return "💎 ماسي"
+    if elo >= 1600: return "🥇 ذهبي"
+    if elo >= 1400: return "🥈 فضي"
+    if elo >= 1200: return "🥉 برونزي"
+    if elo >= 1000: return "⚪ مبتدئ"
+    return "🐣 جديد"
+
+
+def calculate_elo(winner_elo: int, loser_elo: int, is_draw: bool = False) -> tuple[int, int]:
+    K = 32
+    expected_winner = 1 / (1 + 10 ** ((loser_elo - winner_elo) / 400))
+    expected_loser = 1 / (1 + 10 ** ((winner_elo - loser_elo) / 400))
+    if is_draw:
+        new_winner = int(winner_elo + K * (0.5 - expected_winner))
+        new_loser = int(loser_elo + K * (0.5 - expected_loser))
+    else:
+        new_winner = int(winner_elo + K * (1 - expected_winner))
+        new_loser = int(loser_elo + K * (0 - expected_loser))
+    return new_winner, new_loser
+
+
+def update_elo_for_game(game: GameState, winner: str) -> None:
+    elo_data = _load_elo()
+    alive = [p for p in game.players if p.alive or True]
+    winning_team = winner
+    for p in game.players:
+        key = str(p.user_id)
+        if key not in elo_data:
+            elo_data[key] = {"elo": 1000, "games": 0, "wins": 0, "streak": 0, "peak": 1000}
+        elo_data[key]["games"] = elo_data[key].get("games", 0) + 1
+        team = ROLES[p.role_name].team
+        is_winner = False
+        if winning_team == "mafia" and team in ("mafia", "helper"):
+            is_winner = True
+        elif winning_team == "citizens" and team == "citizens":
+            is_winner = True
+        elif winning_team == "cult" and team == "cult":
+            is_winner = True
+        elif winning_team == "lovers" and p.role_name == LOVER_ROLE:
+            is_winner = True
+        if is_winner:
+            elo_data[key]["wins"] = elo_data[key].get("wins", 0) + 1
+            elo_data[key]["streak"] = elo_data[key].get("streak", 0) + 1
+        else:
+            elo_data[key]["streak"] = 0
+    team_elos: dict[str, list[int]] = {}
+    team_winners: dict[str, list[int]] = {}
+    for p in game.players:
+        key = str(p.user_id)
+        team = ROLES[p.role_name].team
+        is_w = False
+        if winning_team == "mafia" and team in ("mafia", "helper"):
+            is_w = True
+        elif winning_team == "citizens" and team == "citizens":
+            is_w = True
+        elif winning_team == "cult" and team == "cult":
+            is_w = True
+        elif winning_team == "lovers" and p.role_name == LOVER_ROLE:
+            is_w = True
+        team_elos.setdefault(team, []).append(elo_data[key]["elo"])
+        if is_w:
+            team_winners.setdefault(team, []).append(elo_data[key]["elo"])
+    for p in game.players:
+        key = str(p.user_id)
+        old_elo = elo_data[key]["elo"]
+        team = ROLES[p.role_name].team
+        is_w = False
+        if winning_team == "mafia" and team in ("mafia", "helper"):
+            is_w = True
+        elif winning_team == "citizens" and team == "citizens":
+            is_w = True
+        elif winning_team == "cult" and team == "cult":
+            is_w = True
+        elif winning_team == "lovers" and p.role_name == LOVER_ROLE:
+            is_w = True
+        avg_loser = 0
+        opponent_team = "citizens" if team in ("mafia", "helper") else "mafia"
+        if opponent_team in team_elos and team_elos[opponent_team]:
+            avg_loser = sum(team_elos[opponent_team]) // len(team_elos[opponent_team])
+        if avg_loser == 0:
+            avg_loser = 1000
+        if is_w:
+            new_elo, _ = calculate_elo(old_elo, avg_loser)
+        else:
+            _, new_elo = calculate_elo(avg_loser, old_elo)
+        elo_data[key]["elo"] = max(0, new_elo)
+        elo_data[key]["peak"] = max(elo_data[key].get("peak", 0), elo_data[key]["elo"])
+    _save_elo(elo_data)
+
+
+# ============================================================================
+# نظام التحديات اليومية
+# ============================================================================
+def _load_daily_challenges() -> dict[str, Any]:
+    return _load_json(CHALLENGES_FILE, {})
+
+
+def _save_daily_challenges(data: dict[str, Any]) -> None:
+    _save_json(CHALLENGES_FILE, data)
+
+
+def get_today_challenges() -> list[dict[str, Any]]:
+    from datetime import date
+    today = date.today().isoformat()
+    data = _load_daily_challenges()
+    if data.get("date") == today:
+        return data.get("challenges", [])
+    selected = random.sample(DAILY_CHALLENGES, min(3, len(DAILY_CHALLENGES)))
+    _save_daily_challenges({"date": today, "challenges": selected})
+    return selected
+
+
+def check_challenge_completion(user_id: int, game: GameState, winner: str) -> list[str]:
+    completed = []
+    challenges = get_today_challenges()
+    stats = get_stats(user_id)
+    player = next((p for p in game.players if p.user_id == user_id), None)
+    if not player:
+        return completed
+    for ch in challenges:
+        cid = ch["id"]
+        team = ch.get("team", "any")
+        role = ch.get("role")
+        if cid == "win_mafia":
+            pteam = ROLES[player.role_name].team
+            if winner == "mafia" and pteam in ("mafia", "helper"):
+                completed.append(cid)
+        elif cid == "win_citizen":
+            if winner == "citizens" and ROLES[player.role_name].team == "citizens":
+                completed.append(cid)
+        elif cid == "survive":
+            if player.alive:
+                completed.append(cid)
+        elif cid == "kill_mafia":
+            if role and player.role_name == role and winner in ("citizens",):
+                completed.append(cid)
+        elif cid == "heal_target":
+            if role and player.role_name == role and winner in ("citizens",):
+                completed.append(cid)
+        elif cid == "vote_eliminate":
+            if player.user_id in game.day_votes:
+                completed.append(cid)
+        elif cid == "cult_leader_win":
+            if role and player.role_name == role and winner == "cult":
+                completed.append(cid)
+        elif cid == "lovers_win":
+            if role and player.role_name == role and winner == "lovers":
+                completed.append(cid)
+        elif cid == "sheriff_catch":
+            if role and player.role_name == role and winner in ("citizens",):
+                completed.append(cid)
+        elif cid == "three_games":
+            if stats.get("games_played", 0) >= 3:
+                completed.append(cid)
+    return completed
 
 
 # ============================================================================
@@ -433,11 +697,24 @@ def build_day_embed(game: GameState, alive: list[PlayerState], remaining: int = 
     if game.day > 0 and game.dead_players:
         recent = game.dead_players[-5:]
         dead_text = "\n".join(f"💀 <@{p.user_id}> — {ROLES[p.role_name].name}" for p in recent)
-    timer_text = f"⏰ **الوقت المتبقي:** {remaining} ثانية" if remaining > 0 else "⏰ **الوقت:** انتهى"
+    timer_text = ""
+    if remaining > 0:
+        progress = int((remaining / DAY_DURATION_DEFAULT) * 10)
+        bar = "█" * progress + "░" * (10 - progress)
+        if remaining <= 10:
+            timer_text = f"🔴 **الوقت المتبقي:** {remaining} ثانية ⚠️\n`{bar}`"
+        else:
+            timer_text = f"⏰ **الوقت المتبقي:** {remaining} ثانية\n`{bar}`"
+    else:
+        timer_text = "⏰ **الوقت:** انتهى!"
     alive_voters = [p for p in alive]
     voted = len(game.day_votes)
     total_voters = len(alive_voters)
     vote_status = f"🗳️ **الأصوات:** {voted}/{total_voters}"
+    if voted > 0:
+        vote_status += " ✅"
+    else:
+        vote_status += " ⏳"
     desc = (
         f"🧑 **الأحياء:** {len(alive)}/{len(game.players)}\n"
         f"{timer_text}\n"
@@ -493,6 +770,10 @@ def build_role_dm_embed(role: Role) -> discord.Embed:
     embed.add_field(name="الفريق", value=team_ar.get(role.team, role.team), inline=True)
     if role.night_action:
         embed.add_field(name="🌙 فعل ليلي", value="✅ نعم", inline=True)
+    tips = ROLE_TIPS.get(role.name, [])
+    if tips:
+        tips_text = "\n".join(f"• {t}" for t in tips)
+        embed.add_field(name="💡 نصائح استراتيجية", value=tips_text, inline=False)
     embed.set_footer(text="هذه الرسالة مخفية — لا أحد يراها غيرك")
     return embed
 
@@ -673,7 +954,7 @@ class DayVoteView(discord.ui.View):
 
 
 class NightActionView(discord.ui.View):
-    """اختيار هدف الفعل الليلي - DM لكل لاعب."""
+    """اختيار هدف الفعل الليلي مع تأكيد — DM لكل لاعب."""
 
     def __init__(self, game: GameState, actor_id: int, alive_targets: list[PlayerState]):
         timeout = 30 if game.is_fast else 45
@@ -681,31 +962,79 @@ class NightActionView(discord.ui.View):
         self.game = game
         self.actor_id = actor_id
         self.alive_targets = alive_targets
-        for p in alive_targets:
-            if p.user_id == actor_id:
+        self.selected_target: Optional[int] = None
+        self.confirmed = False
+        self._build_target_buttons()
+
+    def _build_target_buttons(self):
+        self.clear_items()
+        for p in self.alive_targets:
+            if p.user_id == self.actor_id:
                 continue
             btn = discord.ui.Button(label=p.display_name[:32], style=discord.ButtonStyle.danger, custom_id=f"na_{p.user_id}")
-            btn.callback = self._make_cb(p.user_id)
+            btn.callback = self._make_select_cb(p.user_id)
             self.add_item(btn)
         skip = discord.ui.Button(label="⏭ تخطي", style=discord.ButtonStyle.secondary, custom_id="na_skip")
-        skip.callback = self._make_cb(None)
+        skip.callback = self._make_select_cb(None)
         self.add_item(skip)
 
-    def _make_cb(self, target_id: Optional[int]):
+    def _build_confirm_buttons(self):
+        self.clear_items()
+        if self.selected_target:
+            btn = discord.ui.Button(label=f"✅ تأكيد: {self._get_target_name()}", style=discord.ButtonStyle.success, custom_id="na_confirm")
+            btn.callback = self._confirm_cb
+            self.add_item(btn)
+        else:
+            btn = discord.ui.Button(label="✅ تخطي (لا فعل)", style=discord.ButtonStyle.secondary, custom_id="na_confirm_skip")
+            btn.callback = self._confirm_cb
+            self.add_item(btn)
+        back = discord.ui.Button(label="🔄 تغيير الاختيار", style=discord.ButtonStyle.grey, custom_id="na_back")
+        back.callback = self._back_cb
+        self.add_item(back)
+
+    def _get_target_name(self) -> str:
+        if not self.selected_target:
+            return ""
+        p = next((p for p in self.alive_targets if p.user_id == self.selected_target), None)
+        return p.display_name if p else "?"
+    
+    def _make_select_cb(self, target_id: Optional[int]):
         async def callback(interaction: discord.Interaction):
-            await self._handle(interaction, target_id)
+            await self._handle_select(interaction, target_id)
         return callback
 
-    async def _handle(self, interaction: discord.Interaction, target_id: Optional[int]):
+    async def _handle_select(self, interaction: discord.Interaction, target_id: Optional[int]):
         if interaction.user.id != self.actor_id:
             return await interaction.response.send_message("❌ ليس دورك.", ephemeral=True)
+        self.selected_target = target_id
         actor = next((p for p in self.game.players if p.user_id == self.actor_id), None)
         if not actor:
             return
         role = ROLES[actor.role_name]
-        # تسجيل الفعل
+        if target_id:
+            t = next((p for p in self.game.players if p.user_id == target_id), None)
+            tname = t.display_name if t else "?"
+            desc = f"**اخترت:** {role.emoji} <@{target_id}> ({tname})\n\n⚠️ **اضغط تأكيد لتنفيذ الفعل**"
+        else:
+            desc = "اخترت **تخطي** الفعل الليلي.\n\n⚠️ **اضغط تأكيد للتأكيد**"
+        embed = discord.Embed(title=f"🌙 الليل {self.game.day} — {role.emoji} {role.name}", description=desc, color=discord.Color.dark_purple())
+        self._build_confirm_buttons()
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    async def _confirm_cb(self, interaction: discord.Interaction):
+        if interaction.user.id != self.actor_id:
+            return await interaction.response.send_message("❌ ليس دورك.", ephemeral=True)
+        if self.confirmed:
+            return await interaction.response.send_message("❌ تم التأكيد بالفعل.", ephemeral=True)
+        self.confirmed = True
+        actor = next((p for p in self.game.players if p.user_id == self.actor_id), None)
+        if not actor:
+            return
+        role = ROLES[actor.role_name]
+        target_id = self.selected_target
         self.game.night_actions.setdefault(role.name, {})[self.actor_id] = target_id
         actor.night_action_target = target_id
+        actor.night_action_taken = True
         if role.name in ("الطبيب", "الممرضة"):
             self.game.doctor_protect = target_id
             if target_id:
@@ -722,10 +1051,6 @@ class NightActionView(discord.ui.View):
                 cl.cult_known_cult.add(actor.user_id)
         if role.name == "القنّاص" and target_id and not actor.sniper_used:
             actor.sniper_used = True
-            t = next((p for p in self.game.players if p.user_id == target_id), None)
-            if t and t.role_name != "المحتال":
-                # السهام ستُحلّ في resolve_night
-                pass
         if role.name == "الشرطي" and target_id:
             t = next((p for p in self.game.players if p.user_id == target_id), None)
             if t:
@@ -733,12 +1058,31 @@ class NightActionView(discord.ui.View):
                 result = "🔴 مافيا" if team in ("mafia", "helper") else ("🟣 طائفة" if team == "cult" else "🟢 مواطن")
                 embed = discord.Embed(title="🔍 نتيجة التحقيق", description=f"**{t.display_name}**: {result}", color=discord.Color.blue())
                 embed.set_footer(text="مخفي — لا أحد غيرك يراه")
-                await interaction.response.send_message(embed=embed, ephemeral=True)
+                for child in self.children:
+                    child.disabled = True
+                await interaction.response.edit_message(embed=embed, view=self)
                 return
         if target_id:
-            await interaction.response.send_message(f"✅ تم اختيار: <@{target_id}>", ephemeral=True)
+            desc = f"✅ **تم التأكيد:** {role.emoji} <@{target_id}>\n\n🔒 لا يمكنك تغيير اختيارك."
         else:
-            await interaction.response.send_message("⏭ تخطيت.", ephemeral=True)
+            desc = "✅ **تم التأكيد:** تخطي الفعل.\n\n🔒 لا يمكنك تغيير اختيارك."
+        embed = discord.Embed(title=f"🌙 الليل {self.game.day} — {role.emoji} {role.name}", description=desc, color=discord.Color.green())
+        for child in self.children:
+            child.disabled = True
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    async def _back_cb(self, interaction: discord.Interaction):
+        if interaction.user.id != self.actor_id:
+            return await interaction.response.send_message("❌ ليس دورك.", ephemeral=True)
+        actor = next((p for p in self.game.players if p.user_id == self.actor_id), None)
+        if not actor:
+            return
+        role = ROLES[actor.role_name]
+        self.selected_target = None
+        desc = role.description + "\n\n**اختر هدفك من الأسفل:**"
+        embed = discord.Embed(title=f"🌙 الليل {self.game.day} — {role.emoji} {role.name}", description=desc, color=discord.Color.dark_purple())
+        self._build_target_buttons()
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def on_timeout(self):
         pass
@@ -771,6 +1115,9 @@ class MafiaNightView(discord.ui.View):
     async def _handle(self, interaction: discord.Interaction, target_id: Optional[int]):
         if not any(p.user_id == interaction.user.id for p in self.mafia_players):
             return await interaction.response.send_message("❌ لست من المافيا.", ephemeral=True)
+        actor = next((p for p in self.mafia_players if p.user_id == interaction.user.id), None)
+        if actor:
+            actor.night_action_taken = True
         if target_id:
             self.game.night_kill_votes[interaction.user.id] = target_id
             # تحديث رسالة المافيا
@@ -866,6 +1213,10 @@ class RoleBrowserView(discord.ui.View):
         embed.add_field(name="💎 الندرة", value=role.rarity, inline=True)
         if role.night_action:
             embed.add_field(name="🌙 فعل ليلي", value="✅", inline=True)
+        tips = ROLE_TIPS.get(role.name, [])
+        if tips:
+            tips_text = "\n".join(f"• {t}" for t in tips)
+            embed.add_field(name="💡 نصائح استراتيجية", value=tips_text, inline=False)
         self.clear_items()
         back_cat = discord.ui.Button(label="🔙 رجوع للفئة", style=discord.ButtonStyle.grey, custom_id="rb_back_cat")
         back_cat.callback = self.go_back
@@ -1305,8 +1656,9 @@ async def run_day_phase(game: GameState, channel: discord.TextChannel) -> None:
     msg = await channel.send(embed=embed, view=view)
     game.day_message_id = msg.id
     game.day_votes.clear()
-    # عداد تنازلي متحرك
-    for remaining in range(duration, 0, -10):
+    warned_10 = False
+    warned_30 = False
+    for remaining in range(duration, 0, -5):
         if game.next_phase_event and game.next_phase_event.is_set():
             break
         try:
@@ -1314,14 +1666,24 @@ async def run_day_phase(game: GameState, channel: discord.TextChannel) -> None:
             await msg.edit(embed=embed)
         except Exception:
             pass
-        await asyncio.sleep(10)
-    # انتظار انتهاء الوقت أو ضغط المضيف
+        if remaining == 30 and not warned_30:
+            warned_30 = True
+            try:
+                await channel.send("⏰ **30 ثانية متبقية!** اسرعوا بالتصويت.", delete_after=8)
+            except Exception:
+                pass
+        if remaining == 10 and not warned_10:
+            warned_10 = True
+            try:
+                await channel.send("⚠️ **10 ثوانٍ متبقية!** انتهت اللعبة قريباً!", delete_after=8)
+            except Exception:
+                pass
+        await asyncio.sleep(5)
     try:
         await asyncio.wait_for(game.next_phase_event.wait(), timeout=5)
     except asyncio.TimeoutError:
         pass
     view.stop()
-    # إيقاف الأزرار
     try:
         for child in view.children:
             child.disabled = True
@@ -1332,7 +1694,6 @@ async def run_day_phase(game: GameState, channel: discord.TextChannel) -> None:
 
 
 async def process_day_votes(game: GameState, channel: discord.TextChannel) -> None:
-    # زر "إنهاء النهار" من المضيف سيُفعّل next_phase_event قبل الأوان
     if not game.day_votes:
         embed = discord.Embed(title="⚖️ نتيجة التصويت", description="لم يصوّت أحد. لم يمت أحد.", color=discord.Color.greyple())
         await channel.send(embed=embed)
@@ -1347,6 +1708,21 @@ async def process_day_votes(game: GameState, channel: discord.TextChannel) -> No
             if (voter_id == i1 and game.day_votes.get(i2) == target_id) or (voter_id == i2 and game.day_votes.get(i1) == target_id):
                 weight = 2
         counts[target_id] = counts.get(target_id, 0) + weight
+    # عرض من صوّت على من
+    vote_lines = []
+    for voter_id, target_id in game.day_votes.items():
+        voter = next((p for p in game.players if p.user_id == voter_id), None)
+        if target_id and target_id != 0:
+            target = next((p for p in game.players if p.user_id == target_id), None)
+            vname = voter.display_name if voter else f"#{voter_id}"
+            tname = target.display_name if target else f"#{target_id}"
+            vote_lines.append(f"• {vname} → {tname}")
+        else:
+            vname = voter.display_name if voter else f"#{voter_id}"
+            vote_lines.append(f"• {vname} → ⏭ تخطي")
+    vote_display = "\n".join(vote_lines)
+    embed_votes = discord.Embed(title="📊 نتائج الأصوات", description=vote_display, color=discord.Color.light_grey())
+    await channel.send(embed=embed_votes)
     if not counts:
         embed = discord.Embed(title="⚖️ نتيجة التصويت", description="كل الأصوات تخطي. لم يمت أحد.", color=discord.Color.greyple())
         await channel.send(embed=embed)
@@ -1365,19 +1741,20 @@ async def process_day_votes(game: GameState, channel: discord.TextChannel) -> No
     target.alive = False
     game.dead_players.append(target)
     role = ROLES[target.role_name]
+    death_msg = random.choice(DEATH_MESSAGES["vote"]).format(target=f"<@{target_id}>")
     embed = discord.Embed(
-        title="⚰️ نتيجة التصويت",
-        description=f"صوّت الأغلبية على <@{target_id}>\n💀 مات: **{target.display_name}**\n🎭 كان: {role.emoji} {role.name}",
+        title="⚖️ نتيجة التصويت",
+        description=f"{death_msg}\n🎭 كان: {role.emoji} {role.name} ({target.display_name})\n📊 الأصوات: {counts[target_id]}",
         color=discord.Color.dark_grey(),
     )
     await channel.send(embed=embed)
-    # العاشق يموت
     if target.lover_with:
         lover = next((p for p in game.players if p.user_id == target.lover_with), None)
         if lover and lover.alive:
             lover.alive = False
             game.dead_players.append(lover)
-            embed2 = discord.Embed(title="💔 موت العاشق", description=f"<@{lover.user_id}> مات حزناً على حبيبه.", color=discord.Color.magenta())
+            lover_death = random.choice(DEATH_MESSAGES["lover_death"]).format(target=f"<@{lover.user_id}>")
+            embed2 = discord.Embed(title="💔 موت العاشق", description=lover_death, color=discord.Color.magenta())
             await channel.send(embed=embed2)
 
 
@@ -1387,6 +1764,7 @@ async def run_night_phase(game: GameState, channel: discord.TextChannel) -> None
     for p in game.players:
         p.protected_today = False
         p.night_action_target = None
+        p.night_action_taken = False
     game.night_kill_votes.clear()
     game.night_actions.clear()
     game.doctor_protect = None
@@ -1433,10 +1811,35 @@ async def run_night_phase(game: GameState, channel: discord.TextChannel) -> None
     await asyncio.sleep(wait_time)
     # 4. حلّ النتائج
     await resolve_night(game, channel)
+    # 5. كشف AFK — تنبيه من لم يتصرف ليلاً
+    afk_players = []
+    for p in alive:
+        role = ROLES[p.role_name]
+        if role.night_action and role.team not in ("mafia", "helper") and role.name != LOVER_ROLE:
+            if not p.night_action_taken:
+                p.afk_warns += 1
+                afk_players.append(p)
+    if afk_players:
+        afk_text = "\n".join(f"• <@{p.user_id}> ({p.role_name}) - تحذير {p.afk_warns}/3" for p in afk_players)
+        embed = discord.Embed(
+            title="💤 كشف AFK",
+            description=f"اللاعبون التاليون لم يتصرفوا ليلاً:\n{afk_text}\n\n⚠️ **3 تحذيرات = طرد تلقائي**",
+            color=discord.Color.orange(),
+        )
+        await channel.send(embed=embed)
+        for p in afk_players:
+            if p.afk_warns >= 3:
+                p.alive = False
+                game.dead_players.append(p)
+                embed_afk = discord.Embed(
+                    title="💤 طرد AFK",
+                    description=f"**{p.display_name}** طُرد لأنه لم يتصرف 3 ليالٍ متتالية.\n🎭 كان: {ROLES[p.role_name].emoji} {ROLES[p.role_name].name}",
+                    color=discord.Color.red(),
+                )
+                await channel.send(embed=embed_afk)
 
 
 async def resolve_night(game: GameState, channel: discord.TextChannel) -> None:
-    # 1. تصويت المافيا
     kill_target_id = None
     if game.night_kill_votes:
         counts: dict[int, int] = {}
@@ -1446,9 +1849,7 @@ async def resolve_night(game: GameState, channel: discord.TextChannel) -> None:
             counts[target] = counts.get(target, 0) + w
         if counts:
             kill_target_id = max(counts, key=counts.get)
-    # 2. القنّاص
     sniper_actions = game.night_actions.get("القنّاص", {})
-    # 3. تطبيق القتل
     dead_ids: set[int] = set()
     events: list[str] = []
     if kill_target_id:
@@ -1460,7 +1861,7 @@ async def resolve_night(game: GameState, channel: discord.TextChannel) -> None:
                 target.alive = False
                 game.dead_players.append(target)
                 dead_ids.add(target.user_id)
-                events.append(f"🔪 <@{target.user_id}> قُتل على يد المافيا.")
+                events.append(random.choice(DEATH_MESSAGES["mafia"]).format(target=f"<@{target.user_id}>"))
                 game.last_murder_target = target.user_id
     for actor_id, target_id in sniper_actions.items():
         if not target_id:
@@ -1473,8 +1874,7 @@ async def resolve_night(game: GameState, channel: discord.TextChannel) -> None:
                 target.alive = False
                 game.dead_players.append(target)
                 dead_ids.add(target.user_id)
-                events.append(f"🔫 <@{target.user_id}> قُتل على يد القنّاص.")
-    # 4. تجنيد الطائفة
+                events.append(random.choice(DEATH_MESSAGES["sniper"]).format(target=f"<@{target.user_id}>"))
     cl = next((p for p in game.players if p.alive and p.role_name == "زعيم_الطائفة"), None)
     if cl and cl.cult_target and game.day % 2 == 1:
         target = next((p for p in game.players if p.user_id == cl.cult_target), None)
@@ -1482,12 +1882,10 @@ async def resolve_night(game: GameState, channel: discord.TextChannel) -> None:
             target.cult_team = True
             target.cult_known_cult.add(cl.user_id)
             cl.cult_known_cult.add(target.user_id)
-            events.append(f"⛧ <@{target.user_id}> تم تجنيده في الطائفة.")
-    # 5. الرجل الوحش يلتقي بالمافيا عند مهاجمته
+            events.append(random.choice(DEATH_MESSAGES["cult"]).format(target=f"<@{target.user_id}>"))
     for p in game.players:
         if p.alive and p.role_name in ("الرجل_الوحش", "المحتال_الانتهازي") and p.user_id == kill_target_id:
             p.met_mafia = True
-    # 6. العاشق يموت
     for did in list(dead_ids):
         d = next((p for p in game.players if p.user_id == did), None)
         if d and d.lover_with:
@@ -1495,8 +1893,7 @@ async def resolve_night(game: GameState, channel: discord.TextChannel) -> None:
             if lover and lover.alive:
                 lover.alive = False
                 game.dead_players.append(lover)
-                events.append(f"💔 <@{lover.user_id}> مات مع حبيبه.")
-    # 7. نشر الأحداث
+                events.append(random.choice(DEATH_MESSAGES["lover_death"]).format(target=f"<@{lover.user_id}>"))
     if events:
         embed = discord.Embed(title=f"🌅 الصباح — أحداث الليل {game.day}", description="\n".join(events), color=discord.Color.dark_orange())
         await channel.send(embed=embed)
@@ -1504,7 +1901,6 @@ async def resolve_night(game: GameState, channel: discord.TextChannel) -> None:
 
 async def end_game_show_winner(game: GameState, channel: discord.TextChannel, winner: str) -> None:
     game.phase = "ended"
-    # تحديث الإحصائيات والنقاط
     for p in game.players:
         stats = _load_stats()
         key = str(p.user_id)
@@ -1537,7 +1933,72 @@ async def end_game_show_winner(game: GameState, channel: discord.TextChannel, wi
         else:
             ranks[key] = ranks.get(key, INITIAL_POINTS) + 5
         _save_ranks(ranks)
+    update_elo_for_game(game, winner)
+    # فحص التحديات اليومية
+    challenge_rewards: dict[int, int] = {}
+    for p in game.players:
+        completed = check_challenge_completion(p.user_id, game, winner)
+        if completed:
+            total_reward = 0
+            for cid in completed:
+                ch = next((c for c in DAILY_CHALLENGES if c["id"] == cid), None)
+                if ch:
+                    total_reward += ch["reward"]
+            if total_reward > 0:
+                challenge_rewards[p.user_id] = total_reward
+                ranks = _load_ranks()
+                key = str(p.user_id)
+                ranks[key] = ranks.get(key, INITIAL_POINTS) + total_reward
+                _save_ranks(ranks)
+    # فحص إنجازات جديدة
+    new_achievements: dict[int, list[str]] = {}
+    for p in game.players:
+        newly_unlocked = []
+        if winner == "mafia" and ROLES[p.role_name].team in ("mafia", "helper"):
+            if unlock_achievement(p.user_id, "mafia_lord"):
+                newly_unlocked.append("mafia_lord")
+        if winner == "citizens" and ROLES[p.role_name].team == "citizens":
+            if unlock_achievement(p.user_id, "citizen_hero"):
+                newly_unlocked.append("citizen_hero")
+        if winner == "lovers" and p.role_name == LOVER_ROLE:
+            if unlock_achievement(p.user_id, "lovers_fate"):
+                newly_unlocked.append("lovers_fate")
+        if winner == "cult" and ROLES[p.role_name].team == "cult":
+            if unlock_achievement(p.user_id, "cult_master"):
+                newly_unlocked.append("cult_master")
+        if p.alive and game.day > 3:
+            if unlock_achievement(p.user_id, "survivor"):
+                newly_unlocked.append("survivor")
+        stats = get_stats(p.user_id)
+        if stats.get("games_played", 0) >= 50:
+            if unlock_achievement(p.user_id, "veteran"):
+                newly_unlocked.append("veteran")
+        if newly_unlocked:
+            new_achievements[p.user_id] = newly_unlocked
     embed = build_winner_embed(game, winner)
+    # إضافة معلومات التحديات
+    if challenge_rewards:
+        reward_text = "\n".join(f"• <@{uid}>: +{pts} نقطة" for uid, pts in challenge_rewards.items())
+        embed.add_field(name="🎯 مكافآت التحديات", value=reward_text, inline=False)
+    # إضافة معلومات الإنجازات
+    if new_achievements:
+        ach_text_lines = []
+        for uid, achs in new_achievements.items():
+            for ach_id in achs:
+                ach = ACHIEVEMENTS.get(ach_id)
+                if ach:
+                    ach_text_lines.append(f"• <@{uid}>: {ach.emoji} {ach.name}")
+        if ach_text_lines:
+            embed.add_field(name="🏆 إنجازات جديدة", value="\n".join(ach_text_lines[:10]), inline=False)
+    # إضافة معلومات ELO
+    elo_text_lines = []
+    for p in game.players:
+        key = str(p.user_id)
+        elo = get_elo(p.user_id)
+        elo_title = get_elo_title(elo)
+        elo_text_lines.append(f"• <@{p.user_id}>: **{elo}** {elo_title}")
+    if elo_text_lines:
+        embed.add_field(name="📊 ELO", value="\n".join(elo_text_lines[:12]), inline=False)
     await channel.send(embed=embed)
 
 
@@ -1633,20 +2094,26 @@ async def cmd_achievements(ctx: commands.Context, member: discord.Member = None)
 
 @bot.command(name="تصنيف", aliases=["ترتيب", "leaderboard", "top"])
 async def cmd_leaderboard(ctx: commands.Context):
-    ranks = _load_ranks()
-    if not ranks:
-        return await ctx.send("لا يوجد ترتيب بعد.")
-    sorted_ranks = sorted(ranks.items(), key=lambda x: -x[1])[:10]
+    elo_data = _load_elo()
+    if not elo_data:
+        return await ctx.send("لا يوجد تصنيف بعد.")
+    sorted_elo = sorted(elo_data.items(), key=lambda x: -x[1].get("elo", 1000))[:10]
     medals = ["🥇", "🥈", "🥉"] + [f"**{i}.**" for i in range(4, 11)]
     lines = []
-    for i, (uid, pts) in enumerate(sorted_ranks):
+    for i, (uid, data) in enumerate(sorted_elo):
+        elo = data.get("elo", 1000)
+        title = get_elo_title(elo)
+        games = data.get("games", 0)
+        wins = data.get("wins", 0)
         try:
             user = await bot.fetch_user(int(uid))
             name = user.display_name
         except Exception:
             name = f"User#{uid}"
-        lines.append(f"{medals[i]} {name}: **{pts:,}** | {get_rank_title(pts)}")
-    embed = discord.Embed(title="🏆 أفضل 10 لاعبين", description="\n".join(lines), color=discord.Color.gold())
+        winrate = f"{wins}/{games}" if games > 0 else "0/0"
+        lines.append(f"{medals[i]} {name}: **{elo}** | {title} | {winrate}")
+    embed = discord.Embed(title="🏆 أفضل 10 لاعبين (ELO)", description="\n".join(lines), color=discord.Color.gold())
+    embed.set_footer(text="التصنيف مبني على نظام ELO الحقيقي")
     await ctx.send(embed=embed)
 
 
@@ -1675,6 +2142,10 @@ async def cmd_role_info(ctx: commands.Context, *, role_name: str = ""):
     embed.add_field(name="💎 الندرة", value=found.rarity, inline=True)
     if found.night_action:
         embed.add_field(name="🌙 فعل ليلي", value="✅", inline=True)
+    tips = ROLE_TIPS.get(found.name, [])
+    if tips:
+        tips_text = "\n".join(f"• {t}" for t in tips)
+        embed.add_field(name="💡 نصائح استراتيجية", value=tips_text, inline=False)
     await ctx.send(embed=embed, view=RoleBrowserView())
 
 
@@ -1771,13 +2242,33 @@ async def cmd_tip(ctx: commands.Context):
     await ctx.send(random.choice(tips))
 
 
+@bot.command(name="تحديات", aliases=["challenges", "تحدي"])
+async def cmd_challenges(ctx: commands.Context):
+    """عرض التحديات اليومية المتاحة."""
+    challenges = get_today_challenges()
+    if not challenges:
+        return await ctx.send("❌ لا توجد تحديات اليوم.")
+    desc = "🎯 **تحديات اليوم**\n\n"
+    for i, ch in enumerate(challenges, 1):
+        desc += f"**{i}.** {ch['name']}\n"
+        desc += f"   📋 {ch['description']}\n"
+        desc += f"   💰 مكافأة: **{ch['reward']}** نقطة\n\n"
+    embed = discord.Embed(title="🎯 تحديات اليوم", description=desc, color=discord.Color.orange())
+    embed.set_footer(text="أكمل التحديات للكسب! التحديات تتغير يومياً.")
+    await ctx.send(embed=embed)
+
+
 @bot.command(name="بوت", aliases=["botinfo", "about"])
 async def cmd_bot_info(ctx: commands.Context):
     embed = discord.Embed(title=f"🤖 مافيا 42 v{BOT_VERSION}", description="بوت لعبة مافيا 42 التفاعلي بأزرار ورسائل مخفية.", color=discord.Color.blurple())
     embed.add_field(name="🎮 الأدوار", value=f"{len(ROLES)} دور", inline=True)
     embed.add_field(name="🏆 الإنجازات", value=f"{len(ACHIEVEMENTS)} إنجاز", inline=True)
+    embed.add_field(name="🎯 التحديات", value=f"{len(DAILY_CHALLENGES)} تحدي يومي", inline=True)
     embed.add_field(name="🏠 السيرفرات", value=str(len(bot.guilds)), inline=True)
     embed.add_field(name="🎯 الألعاب النشطة", value=str(len([g for g in games.values() if g.started])), inline=True)
+    embed.add_field(name="📊 نظام ELO", value="تصنيف تنافسي", inline=True)
+    embed.add_field(name="💤 كشف AFK", value="تنبيه تلقائي", inline=True)
+    embed.add_field(name="🔔 تأكيد ليلي", value="اختيار + تأكيد", inline=True)
     embed.add_field(name="البادئة", value="`&`", inline=True)
     embed.add_field(name="اللاعبون", value=f"{MIN_PLAYERS}-{MAX_PLAYERS}", inline=True)
     await ctx.send(embed=embed)
