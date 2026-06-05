@@ -60,6 +60,8 @@ intents.guilds = True
 
 bot = commands.Bot(command_prefix="&", intents=intents, help_command=None)
 games: dict[int, "GameState"] = {}
+persistent_views_registered = False
+lobby_refresh_tasks: dict[int, asyncio.Task] = {}
 
 
 # ============================================================================
@@ -815,7 +817,7 @@ class MafiaLobbyView(discord.ui.View):
     async def join(self, interaction: discord.Interaction, button: discord.ui.Button):
         game = self._get_game(interaction)
         if not game:
-            return await interaction.response.send_message("❌ لا توجد لعبة.", ephemeral=True)
+            return await interaction.response.send_message("❌ لا توجد لعبة. أنشئ لعبة جديدة بـ `&مافيا`", ephemeral=True)
         if game.started:
             return await interaction.response.send_message("⚠️ اللعبة بدأت بالفعل.", ephemeral=True)
         if len(game.players) >= MAX_PLAYERS:
@@ -848,8 +850,7 @@ class MafiaLobbyView(discord.ui.View):
         if game.started:
             return await interaction.response.send_message("⚠️ بدأت بالفعل.", ephemeral=True)
         if len(game.players) < MIN_PLAYERS:
-            return await interaction.response.send_message(f"❌ تحتاج {MIN_PLAYERS} لاعبين على الأقل.", ephemeral=True)
-        # Disable buttons
+            return await interaction.response.send_message(f"❌ تحتاج {MIN_PLAYERS} لاعبين على الأقل.目前: {len(game.players)}", ephemeral=True)
         for child in self.children:
             child.disabled = True
         try:
@@ -857,8 +858,10 @@ class MafiaLobbyView(discord.ui.View):
         except Exception:
             pass
         await interaction.response.send_message("🎮 جارٍ بدء اللعبة...", ephemeral=True)
-        # تشغيل اللعبة في الخلفية
         bot.loop.create_task(start_game_flow(game, interaction.channel))
+        # إلغاء مهمة تحديث اللوبي
+        if game.guild_id in lobby_refresh_tasks:
+            lobby_refresh_tasks.pop(game.guild_id).cancel()
 
     @discord.ui.button(label="⛔ إنهاء", style=discord.ButtonStyle.grey, custom_id="ml_end")
     async def end(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -867,7 +870,6 @@ class MafiaLobbyView(discord.ui.View):
             return await interaction.response.send_message("❌ لا توجد لعبة.", ephemeral=True)
         if not is_game_admin(interaction, game):
             return await interaction.response.send_message("❌ فقط المضيف أو المشرف يمكنهم الإنهاء.", ephemeral=True)
-        # نافذة تأكيد
         confirm = ConfirmView(timeout=15)
         await interaction.response.send_message("⚠️ هل أنت متأكد من إنهاء اللعبة؟", view=confirm, ephemeral=True)
         await confirm.wait()
@@ -882,6 +884,9 @@ class MafiaLobbyView(discord.ui.View):
         if game.next_phase_event:
             game.next_phase_event.set()
         games.pop(game.guild_id, None)
+        # إلغاء مهمة تحديث اللوبي
+        if game.guild_id in lobby_refresh_tasks:
+            lobby_refresh_tasks.pop(game.guild_id).cancel()
         await interaction.followup.send("⛔ تم إنهاء اللعبة.", ephemeral=False)
 
 
@@ -2020,6 +2025,9 @@ async def cmd_start(ctx: commands.Context, mode: str = ""):
     view = MafiaLobbyView()
     msg = await ctx.send(embed=embed, view=view)
     game.lobby_message_id = msg.id
+    lobby_refresh_tasks[guild_id] = bot.loop.create_task(
+        lobby_refresh_task(guild_id, ctx.channel.id, msg.id)
+    )
 
 
 @bot.command(name="إنهاء", aliases=["end", "انهاء"])
@@ -2375,6 +2383,35 @@ async def cmd_backup(ctx: commands.Context):
 # ============================================================================
 # نقطة الدخول
 # ============================================================================
+@bot.event
+async def on_ready():
+    global persistent_views_registered
+    if not persistent_views_registered:
+        bot.add_view(MafiaLobbyView())
+        persistent_views_registered = True
+        log.info("✅ تم تسجيل الـ persistent views")
+    log.info("✅ البوت جاهز: %s (ID: %s)", bot.user, bot.user.id)
+    log.info("   السيرفرات: %d", len(bot.guilds))
+    log.info("   الألعاب النشطة: %d", len([g for g in games.values() if g.started]))
+
+
+async def lobby_refresh_task(guild_id: int, channel_id: int, message_id: int):
+    """يحدّث رسالة اللوبي كل 5 دقائق للحفاظ على نشاط الأزرار."""
+    while guild_id in games and not games[guild_id].started:
+        await asyncio.sleep(300)
+        if guild_id not in games or games[guild_id].started:
+            break
+        game = games[guild_id]
+        try:
+            channel = bot.get_channel(channel_id)
+            if channel:
+                msg = await channel.fetch_message(message_id)
+                if msg:
+                    await msg.edit(embed=build_lobby_embed(game), view=MafiaLobbyView())
+        except Exception:
+            pass
+
+
 def main():
     token = os.environ.get("DISCORD_TOKEN")
     if not token:
