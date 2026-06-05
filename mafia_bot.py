@@ -60,7 +60,6 @@ intents.guilds = True
 
 bot = commands.Bot(command_prefix="&", intents=intents, help_command=None)
 games: dict[int, "GameState"] = {}
-persistent_views_registered = False
 lobby_refresh_tasks: dict[int, asyncio.Task] = {}
 
 
@@ -1555,6 +1554,8 @@ async def start_game_flow(game: GameState, channel: discord.TextChannel) -> None
     finally:
         game.is_running = False
         games.pop(game.guild_id, None)
+        if game.guild_id in lobby_refresh_tasks:
+            lobby_refresh_tasks.pop(game.guild_id).cancel()
 
 
 async def send_role_dms(game: GameState) -> None:
@@ -2385,18 +2386,13 @@ async def cmd_backup(ctx: commands.Context):
 # ============================================================================
 @bot.event
 async def on_ready():
-    global persistent_views_registered
-    if not persistent_views_registered:
-        bot.add_view(MafiaLobbyView())
-        persistent_views_registered = True
-        log.info("✅ تم تسجيل الـ persistent views")
     log.info("✅ البوت جاهز: %s (ID: %s)", bot.user, bot.user.id)
     log.info("   السيرفرات: %d", len(bot.guilds))
     log.info("   الألعاب النشطة: %d", len([g for g in games.values() if g.started]))
 
 
 async def lobby_refresh_task(guild_id: int, channel_id: int, message_id: int):
-    """يحدّث رسالة اللوبي كل 5 دقائق للحفاظ على نشاط الأزرار."""
+    """يحدّث نص رسالة اللوبي كل 5 دقائق دون تغيير الأزرار."""
     while guild_id in games and not games[guild_id].started:
         await asyncio.sleep(300)
         if guild_id not in games or games[guild_id].started:
@@ -2407,7 +2403,7 @@ async def lobby_refresh_task(guild_id: int, channel_id: int, message_id: int):
             if channel:
                 msg = await channel.fetch_message(message_id)
                 if msg:
-                    await msg.edit(embed=build_lobby_embed(game), view=MafiaLobbyView())
+                    await msg.edit(embed=build_lobby_embed(game))
         except Exception:
             pass
 
