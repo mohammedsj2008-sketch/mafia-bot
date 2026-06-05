@@ -614,6 +614,9 @@ class DayVoteView(discord.ui.View):
         skip = discord.ui.Button(label="⏭ تخطي", style=discord.ButtonStyle.secondary, custom_id="dv_skip")
         skip.callback = self._make_vote_cb(None)
         self.add_item(skip)
+        end = discord.ui.Button(label="⏩ إنهاء النهار (للمضيف)", style=discord.ButtonStyle.danger, custom_id="dv_end")
+        end.callback = self.end_day
+        self.add_item(end)
 
     def _make_vote_cb(self, target_id: Optional[int]):
         async def callback(interaction: discord.Interaction):
@@ -633,6 +636,14 @@ class DayVoteView(discord.ui.View):
             await interaction.response.send_message(f"🗳️ صوّت على <@{target_id}>", ephemeral=True)
         else:
             await interaction.response.send_message("⏭ تخطيت التصويت.", ephemeral=True)
+
+    async def end_day(self, interaction: discord.Interaction):
+        game = self.game
+        if interaction.user.id != game.host_id:
+            return await interaction.response.send_message("❌ فقط المضيف يمكنه إنهاء النهار.", ephemeral=True)
+        if game and game.next_phase_event:
+            game.next_phase_event.set()
+        await interaction.response.send_message("⏩ تم إنهاء النهار بواسطة المضيف.", ephemeral=False)
 
     async def on_timeout(self):
         if self.game and self.game.next_phase_event:
@@ -758,6 +769,317 @@ class MafiaNightView(discord.ui.View):
 
     async def on_timeout(self):
         pass
+
+
+# ============================================================================
+# متصفح الأدوار التفاعلي
+# ============================================================================
+class RoleBrowserView(discord.ui.View):
+    """متصفح تفاعلي للأدوار - فئات ← أدوار ← تفاصيل."""
+
+    CATEGORIES = {
+        "mafia": ("🔴", "المافيا", [n for n, r in ROLES.items() if r.team == "mafia"]),
+        "helper": ("🟠", "مساعدو المافيا", [n for n, r in ROLES.items() if r.team == "helper"]),
+        "citizens": ("🟢", "المواطنون", [n for n, r in ROLES.items() if r.team == "citizens"]),
+        "cult": ("🟣", "الطائفة", [n for n, r in ROLES.items() if r.team == "cult"]),
+        "neutral": ("🟡", "محايد", [n for n, r in ROLES.items() if r.team == "neutral"]),
+    }
+
+    def __init__(self):
+        super().__init__(timeout=120)
+        self.build_categories()
+
+    async def on_timeout(self):
+        for c in self.children:
+            c.disabled = True
+        try:
+            await self.message.edit(view=self)
+        except Exception:
+            pass
+
+    def clear_and_add(self, *items):
+        self.clear_items()
+        for item in items:
+            self.add_item(item)
+
+    def build_categories(self):
+        """الصفحة الرئيسية: أزرار الفئات."""
+        self.clear_items()
+        for key, (emoji, name, _) in self.CATEGORIES.items():
+            cnt = len(self.CATEGORIES[key][2])
+            btn = discord.ui.Button(label=f"{emoji} {name} ({cnt})", style=discord.ButtonStyle.secondary, custom_id=f"rb_cat_{key}")
+            btn.callback = self.make_cat_cb(key)
+            self.add_item(btn)
+
+    def make_cat_cb(self, cat_key: str):
+        async def cb(interaction: discord.Interaction):
+            await self.show_category(interaction, cat_key)
+        return cb
+
+    async def show_category(self, interaction: discord.Interaction, cat_key: str):
+        emoji, cat_name, roles = self.CATEGORIES[cat_key]
+        self.clear_items()
+        for rname in roles:
+            role = ROLES[rname]
+            btn = discord.ui.Button(label=f"{role.emoji} {role.name}", style=discord.ButtonStyle.primary, custom_id=f"rb_role_{rname}")
+            btn.callback = self.make_role_cb(rname)
+            self.add_item(btn)
+        back = discord.ui.Button(label="🔙 رجوع", style=discord.ButtonStyle.grey, custom_id="rb_back")
+        back.callback = self.go_back
+        self.add_item(back)
+        embed = discord.Embed(title=f"{emoji} {cat_name} ({len(roles)})", color=discord.Color.dark_blue())
+        await interaction.response.edit_message(content=None, embed=embed, view=self)
+
+    def make_role_cb(self, rname: str):
+        async def cb(interaction: discord.Interaction):
+            await self.show_role(interaction, rname)
+        return cb
+
+    async def show_role(self, interaction: discord.Interaction, rname: str):
+        role = ROLES[rname]
+        team_ar = {"mafia": "🔴 المافيا", "citizens": "🟢 المواطنون", "cult": "🟣 الطائفة", "neutral": "🟡 محايد", "helper": "🟠 مساعدو المافيا"}
+        color = {"mafia": discord.Color.dark_red(), "citizens": discord.Color.green(), "cult": discord.Color.purple(), "neutral": discord.Color.gold(), "helper": discord.Color.orange()}.get(role.team, discord.Color.greyple())
+        embed = discord.Embed(title=f"{role.emoji} {role.name}", description=role.description, color=color)
+        embed.add_field(name="👥 الفريق", value=team_ar.get(role.team, role.team), inline=True)
+        embed.add_field(name="💎 الندرة", value=role.rarity, inline=True)
+        if role.night_action:
+            embed.add_field(name="🌙 فعل ليلي", value="✅", inline=True)
+        self.clear_items()
+        back_cat = discord.ui.Button(label="🔙 رجوع للفئة", style=discord.ButtonStyle.grey, custom_id="rb_back_cat")
+        back_cat.callback = self.go_back
+        home = discord.ui.Button(label="🏠 الفئات", style=discord.ButtonStyle.secondary, custom_id="rb_home")
+        home.callback = self.go_home
+        self.add_item(back_cat)
+        self.add_item(home)
+        await interaction.response.edit_message(content=None, embed=embed, view=self)
+
+    async def go_back(self, interaction: discord.Interaction):
+        # العودة للفئة الأخيرة (من custom_id)
+        msg = interaction.message
+        embed = msg.embeds[0] if msg.embeds else None
+        title = embed.title if embed else ""
+        for key, (emoji, name, _) in self.CATEGORIES.items():
+            if f"{emoji} {name}" in title:
+                return await self.show_category(interaction, key)
+        # If not found, go home
+        await self.go_home(interaction)
+
+    async def go_home(self, interaction: discord.Interaction):
+        self.build_categories()
+        embed = discord.Embed(title="📖 أدوار مافيا 42", description=f"**{len(ROLES)} دور رسمي**\nاختر فئة لتصفّح الأدوار.", color=discord.Color.dark_blue())
+        await interaction.response.edit_message(content=None, embed=embed, view=self)
+
+
+# ============================================================================
+# واجهة الحساب التفاعلية (نقاط + إحصائيات + إنجازات)
+# ============================================================================
+class AccountView(discord.ui.View):
+    """واجهة حساب اللاعب التفاعلية."""
+
+    def __init__(self, user_id: int, display_name: str, avatar_url: str):
+        super().__init__(timeout=120)
+        self.user_id = user_id
+        self.display_name = display_name
+        self.avatar_url = avatar_url
+        self.page = "points"
+        self.achievement_ids = get_player_achievements(user_id)
+        self.build_buttons()
+
+    def build_buttons(self):
+        self.clear_items()
+        pts = discord.ui.Button(label="💎 نقاط", style=discord.ButtonStyle.green if self.page == "points" else discord.ButtonStyle.grey, custom_id="ac_points")
+        pts.callback = self.go_points
+        self.add_item(pts)
+        stats = discord.ui.Button(label="📊 إحصائيات", style=discord.ButtonStyle.blurple if self.page == "stats" else discord.ButtonStyle.grey, custom_id="ac_stats")
+        stats.callback = self.go_stats
+        self.add_item(stats)
+        ach = discord.ui.Button(label="🏆 إنجازات", style=discord.ButtonStyle.gold if self.page == "achievements" else discord.ButtonStyle.grey, custom_id="ac_ach")
+        ach.callback = self.go_achievements
+        self.add_item(ach)
+
+    async def _update(self, interaction: discord.Interaction):
+        self.build_buttons()
+        embed = await self._build_embed()
+        await interaction.response.edit_message(content=None, embed=embed, view=self)
+
+    async def _build_embed(self) -> discord.Embed:
+        if self.page == "points":
+            ranks = _load_ranks()
+            pts = ranks.get(str(self.user_id), INITIAL_POINTS)
+            title = get_rank_title(pts)
+            embed = discord.Embed(title=f"💎 نقاط {self.display_name}", description=f"**النقاط:** {pts:,}\n**الرتبة:** {title}", color=discord.Color.gold())
+            embed.set_thumbnail(url=self.avatar_url)
+            return embed
+        if self.page == "stats":
+            s = get_stats(self.user_id)
+            embed = discord.Embed(title=f"📊 إحصائيات {self.display_name}", color=discord.Color.blue())
+            embed.set_thumbnail(url=self.avatar_url)
+            embed.add_field(name="🎮 مجموع الألعاب", value=str(s.get("games_played", 0)), inline=True)
+            embed.add_field(name="✅ مافيا انتصارات", value=f"{s.get('wins_as_mafia', 0)}/{s.get('games_as_mafia', 0)}", inline=True)
+            embed.add_field(name="✅ مواطن انتصارات", value=f"{s.get('wins_as_citizen', 0)}/{s.get('games_as_citizen', 0)}", inline=True)
+            embed.add_field(name="🛡️ مرات البقاء", value=str(s.get("times_survived", 0)), inline=True)
+            top = ", ".join(f"{r} ({n})" for r, n in sorted(s.get("roles_played", {}).items(), key=lambda x: -x[1])[:3]) or "—"
+            embed.add_field(name="⭐ أكثر الأدوار", value=top, inline=False)
+            return embed
+        achs = [ACHIEVEMENTS[aid] for aid in self.achievement_ids if aid in ACHIEVEMENTS]
+        lines = [f"{a.emoji} **{a.name}** — {a.description}" for a in achs]
+        embed = discord.Embed(title=f"🏆 إنجازات {self.display_name} ({len(achs)}/{len(ACHIEVEMENTS)})", description="\n".join(lines[:20]) or "لا يوجد", color=discord.Color.gold())
+        embed.set_thumbnail(url=self.avatar_url)
+        return embed
+
+    async def go_points(self, interaction: discord.Interaction):
+        self.page = "points"
+        await self._update(interaction)
+
+    async def go_stats(self, interaction: discord.Interaction):
+        self.page = "stats"
+        await self._update(interaction)
+
+    async def go_achievements(self, interaction: discord.Interaction):
+        self.page = "achievements"
+        await self._update(interaction)
+
+
+# ============================================================================
+# واجهة المساعدة التفاعلية
+# ============================================================================
+class HelpView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=120)
+        self.build_main()
+
+    def build_main(self):
+        self.clear_items()
+        game = discord.ui.Button(label="🎮 اللعبة", style=discord.ButtonStyle.primary, custom_id="hp_game")
+        game.callback = self.show_game
+        self.add_item(game)
+        player = discord.ui.Button(label="👤 اللاعب", style=discord.ButtonStyle.success, custom_id="hp_player")
+        player.callback = self.show_player
+        self.add_item(player)
+        info = discord.ui.Button(label="📖 معلومات", style=discord.ButtonStyle.blurple, custom_id="hp_info")
+        info.callback = self.show_info
+        self.add_item(info)
+        admin = discord.ui.Button(label="🔧 مشرف", style=discord.ButtonStyle.danger, custom_id="hp_admin")
+        admin.callback = self.show_admin
+        self.add_item(admin)
+
+    async def show_main(self, interaction: discord.Interaction):
+        self.build_main()
+        embed = discord.Embed(title=f"📚 مساعدة مافيا 42 v{BOT_VERSION}", description="اختر فئة لرؤية الأوامر.", color=discord.Color.blurple())
+        await interaction.response.edit_message(content=None, embed=embed, view=self)
+
+    async def _show_cat(self, interaction: discord.Interaction, title: str, text: str, color: discord.Color):
+        self.clear_items()
+        back = discord.ui.Button(label="🔙 رجوع", style=discord.ButtonStyle.grey, custom_id="hp_back")
+        back.callback = self.show_main
+        self.add_item(back)
+        embed = discord.Embed(title=title, description=text, color=color)
+        await interaction.response.edit_message(content=None, embed=embed, view=self)
+
+    async def show_game(self, interaction: discord.Interaction):
+        await self._show_cat(interaction, "🎮 أوامر اللعبة",
+            "`&مافيا` — افتح لوبي تفاعلي\n"
+            "**بعد بدء اللعبة:**\n"
+            "• أزرار انضمام/خروج في اللوبي\n"
+            "• أزرار تصويت في النهار\n"
+            "• أزرار أفعال ليلية في الخاص\n"
+            "• `&إنهاء` — إنهاء اللعبة\n"
+            "• `&حالة` — لوحة الحالة التفاعلية\n"
+            "• `&دوري` — دورك في الخاص",
+            discord.Color.green())
+
+    async def show_player(self, interaction: discord.Interaction):
+        await self._show_cat(interaction, "👤 أوامر اللاعب",
+            "`&نقاط [@لاعب]` — نقاطك ورتبتك\n"
+            "`&إحصائيات [@لاعب]` — إحصائيات\n"
+            "`&إنجازاتي [@لاعب]` — الإنجازات\n"
+            "`&تصنيف` — أفضل 10 لاعبين\n\n"
+            "كل هذه الأوامر تفاعلية بأزرار.",
+            discord.Color.blue())
+
+    async def show_info(self, interaction: discord.Interaction):
+        await self._show_cat(interaction, "📖 معلومات",
+            "`&أدوار` — متصفح أدوار تفاعلي\n"
+            "`&دور <اسم>` — تفاصيل دور\n"
+            "`&نصيحة` — نصيحة عشوائية\n"
+            "`&بوت` — معلومات البوت",
+            discord.Color.gold())
+
+    async def show_admin(self, interaction: discord.Interaction):
+        await self._show_cat(interaction, "🔧 أوامر المشرف",
+            "`&اضافه_قناة <ID>` — إضافة قناة\n"
+            "`&حذف_قناة <ID>` — حذف قناة\n"
+            "`&قنوات` — عرض القنوات\n"
+            "`&ريست_نقاط` — إعادة ضبط\n"
+            "`&اعطاء_نقاط @لاعب <كم>`\n"
+            "`&حذف_نقاط @لاعب <كم>`\n"
+            "`&اعلان <رسالة>`\n"
+            "`&باكب` — نسخة احتياطية",
+            discord.Color.red())
+
+
+# ============================================================================
+# لوحة حالة اللعبة التفاعلية
+# ============================================================================
+class GameStatusView(discord.ui.View):
+    def __init__(self, game: GameState):
+        super().__init__(timeout=60)
+        self.game = game
+        myrole = discord.ui.Button(label="🎭 دوري", style=discord.ButtonStyle.primary, custom_id="gs_myrole")
+        myrole.callback = self.send_my_role
+        self.add_item(myrole)
+        whisper = discord.ui.Button(label="💬 همس للمافيا", style=discord.ButtonStyle.danger, custom_id="gs_whisper")
+        whisper.callback = self.open_whisper
+        self.add_item(whisper)
+
+    async def send_my_role(self, interaction: discord.Interaction):
+        player = next((p for p in self.game.players if p.user_id == interaction.user.id), None)
+        if not player:
+            return await interaction.response.send_message("❌ لست في اللعبة.", ephemeral=True)
+        try:
+            embed = build_role_dm_embed(ROLES[player.role_name])
+            await interaction.user.send(embed=embed)
+            await interaction.response.send_message("✅ أرسلت دورك في الخاص!", ephemeral=True)
+        except discord.Forbidden:
+            await interaction.response.send_message("❌ افتح الخاص.", ephemeral=True)
+
+    async def open_whisper(self, interaction: discord.Interaction):
+        player = next((p for p in self.game.players if p.user_id == interaction.user.id), None)
+        if not player:
+            return await interaction.response.send_message("❌ لست في اللعبة.", ephemeral=True)
+        role = ROLES[player.role_name]
+        if role.team not in ("mafia", "helper") and not player.met_mafia:
+            return await interaction.response.send_message("❌ لست من المافيا.", ephemeral=True)
+        await interaction.response.send_modal(WhisperModal(self.game))
+
+
+# صندوق الهمس للمافيا (Modal)
+class WhisperModal(discord.ui.Modal, title="💬 همسة للمافيا"):
+    message = discord.ui.TextInput(label="رسالتك", style=discord.TextStyle.paragraph, max_length=500, placeholder="اكتب رسالتك السرية هنا...")
+
+    def __init__(self, game: GameState):
+        super().__init__()
+        self.game = game
+
+    async def on_submit(self, interaction: discord.Interaction):
+        player = next((p for p in self.game.players if p.user_id == interaction.user.id), None)
+        if not player or not player.alive:
+            return await interaction.response.send_message("❌ أنت ميت.", ephemeral=True)
+        role = ROLES[player.role_name]
+        if role.team not in ("mafia", "helper") and not player.met_mafia:
+            return await interaction.response.send_message("❌ لست من المافيا.", ephemeral=True)
+        sent = 0
+        for p in self.game.players:
+            if ROLES[p.role_name].team in ("mafia", "helper") and p.met_mafia:
+                try:
+                    user = bot.get_user(p.user_id)
+                    if user:
+                        embed = discord.Embed(title="💬 همسة 🔪", description=f"من {interaction.user.display_name}:\n{self.message.value}", color=discord.Color.dark_red())
+                        await user.send(embed=embed)
+                        sent += 1
+                except Exception:
+                    pass
+        await interaction.response.send_message(f"✅ أُرسلت لـ {sent} عضو في المافيا.", ephemeral=True)
 
 
 # ============================================================================
@@ -1192,53 +1514,53 @@ async def cmd_status(ctx: commands.Context):
     if guild_id not in games:
         return await ctx.send("❌ لا توجد لعبة.", delete_after=5)
     game = games[guild_id]
-    phase_ar = {"lobby": "اللوبي", "day": "النهار", "night": "الليل", "ended": "انتهت"}.get(game.phase, game.phase)
+    phase_ar = {"lobby": "اللوبي 🟣", "day": "النهار ☀️", "night": "الليل 🌙", "ended": "انتهت ⛔"}.get(game.phase, game.phase)
     embed = discord.Embed(title="📊 حالة اللعبة", color=discord.Color.blue())
+    alive = [p for p in game.players if p.alive]
+    dead = [p for p in game.players if not p.alive]
     embed.add_field(name="المرحلة", value=phase_ar, inline=True)
     embed.add_field(name="اليوم", value=str(game.day), inline=True)
     embed.add_field(name="اللاعبون", value=f"{len(game.players)}/{MAX_PLAYERS}", inline=True)
-    alive = [p for p in game.players if p.alive]
-    embed.add_field(name="الأحياء", value=f"{len(alive)}/{len(game.players)}", inline=True)
-    await ctx.send(embed=embed, delete_after=10)
+    embed.add_field(name="🟢 الأحياء", value="\n".join(f"• <@{p.user_id}>" for p in alive[:10]) or "—", inline=True)
+    if dead:
+        embed.add_field(name="💀 الأموات", value="\n".join(f"• <@{p.user_id}>" for p in dead[:10]) or "—", inline=True)
+    embed.set_footer(text="اضغط 🎭 دوري لمعرفة دورك")
+    await ctx.send(embed=embed, view=GameStatusView(game))
 
 
 @bot.command(name="نقاط", aliases=["نقاطي", "points", "score"])
 async def cmd_points(ctx: commands.Context, member: discord.Member = None):
+    """نقاط اللاعب — تفاعلي مع أزرار للتبديل بين الإحصائيات والإنجازات."""
     target = member or ctx.author
-    ranks = _load_ranks()
-    pts = ranks.get(str(target.id), INITIAL_POINTS)
-    title = get_rank_title(pts)
-    embed = discord.Embed(title=f"💎 نقاط {target.display_name}", description=f"**النقاط:** {pts:,}\n**الرتبة:** {title}", color=discord.Color.gold())
-    embed.set_thumbnail(url=target.display_avatar.url)
-    await ctx.send(embed=embed)
+    view = AccountView(target.id, target.display_name, str(target.display_avatar.url))
+    view.page = "points"
+    embed = await view._build_embed()
+    view.build_buttons()
+    await ctx.send(embed=embed, view=view)
 
 
 @bot.command(name="إحصائيات", aliases=["احصائيات", "stats"])
 async def cmd_stats_cmd(ctx: commands.Context, member: discord.Member = None):
+    """إحصائيات اللاعب — تفاعلي مع أزرار للتبديل بين النقاط والإنجازات."""
     target = member or ctx.author
-    s = get_stats(target.id)
-    embed = discord.Embed(title=f"📊 إحصائيات {target.display_name}", color=discord.Color.blue())
-    embed.set_thumbnail(url=target.display_avatar.url)
-    embed.add_field(name="🎮 مجموع الألعاب", value=str(s.get("games_played", 0)), inline=True)
-    embed.add_field(name="✅ مافيا انتصارات", value=f"{s.get('wins_as_mafia', 0)}/{s.get('games_as_mafia', 0)}", inline=True)
-    embed.add_field(name="✅ مواطن انتصارات", value=f"{s.get('wins_as_citizen', 0)}/{s.get('games_as_citizen', 0)}", inline=True)
-    embed.add_field(name="🛡️ مرات البقاء", value=str(s.get("times_survived", 0)), inline=True)
-    roles_played = s.get("roles_played", {})
-    top = ", ".join(f"{r} ({n})" for r, n in sorted(roles_played.items(), key=lambda x: -x[1])[:3]) or "—"
-    embed.add_field(name="⭐ أكثر الأدوار", value=top, inline=False)
-    await ctx.send(embed=embed)
+    view = AccountView(target.id, target.display_name, str(target.display_avatar.url))
+    view.page = "stats"
+    embed = await view._build_embed()
+    view.build_buttons()
+    await ctx.send(embed=embed, view=view)
 
 
 @bot.command(name="إنجازاتي", aliases=["انجازاتي", "achievements"])
 async def cmd_achievements(ctx: commands.Context, member: discord.Member = None):
+    """إنجازات اللاعب — تفاعلي مع أزرار للتبديل بين النقاط والإحصائيات."""
     target = member or ctx.author
-    ach_ids = get_player_achievements(target.id)
-    if not ach_ids:
-        return await ctx.send(f"**{target.display_name}** لا يملك إنجازات بعد.")
-    achs = [ACHIEVEMENTS[aid] for aid in ach_ids if aid in ACHIEVEMENTS]
-    lines = [f"{a.emoji} **{a.name}** — {a.description}" for a in achs]
-    embed = discord.Embed(title=f"🏆 إنجازات {target.display_name} ({len(achs)}/{len(ACHIEVEMENTS)})", description="\n".join(lines[:20]), color=discord.Color.gold())
-    await ctx.send(embed=embed)
+    view = AccountView(target.id, target.display_name, str(target.display_avatar.url))
+    view.page = "achievements"
+    embed = await view._build_embed()
+    view.build_buttons()
+    if not view.achievement_ids and view.page == "achievements":
+        return await ctx.send(f"**{target.display_name}** لا يملك إنجازات بعد.", delete_after=10)
+    await ctx.send(embed=embed, view=view)
 
 
 @bot.command(name="تصنيف", aliases=["ترتيب", "leaderboard", "top"])
@@ -1262,45 +1584,30 @@ async def cmd_leaderboard(ctx: commands.Context):
 
 @bot.command(name="أدوار", aliases=["ادوار", "roles"])
 async def cmd_roles(ctx: commands.Context):
-    mafia_roles = [(n, r) for n, r in ROLES.items() if r.team == "mafia"]
-    citizen_roles = [(n, r) for n, r in ROLES.items() if r.team == "citizens"]
-    cult_roles = [(n, r) for n, r in ROLES.items() if r.team == "cult"]
-    helper_roles = [(n, r) for n, r in ROLES.items() if r.team == "helper"]
-    neutral_roles = [(n, r) for n, r in ROLES.items() if r.team == "neutral"]
-    embed = discord.Embed(title="📖 أدوار مافيا 42", description=f"**{len(ROLES)} دور رسمي**", color=discord.Color.dark_red())
-    if mafia_roles:
-        embed.add_field(name="🔴 المافيا", value="\n".join(f"{r.emoji} **{n}** {'⭐' if r.rarity=='legendary' else '🔵' if r.rarity=='rare' else ''}" for n, r in mafia_roles), inline=False)
-    if helper_roles:
-        embed.add_field(name="🟠 مساعدو المافيا", value="\n".join(f"{r.emoji} **{n}** {'⭐' if r.rarity=='legendary' else '🔵' if r.rarity=='rare' else ''}" for n, r in helper_roles), inline=False)
-    if citizen_roles:
-        embed.add_field(name="🟢 المواطنون", value="\n".join(f"{r.emoji} **{n}** {'⭐' if r.rarity=='legendary' else '🔵' if r.rarity=='rare' else ''}" for n, r in citizen_roles), inline=False)
-    if cult_roles:
-        embed.add_field(name="🟣 الطائفة", value="\n".join(f"{r.emoji} **{n}** ⭐" for n, r in cult_roles), inline=False)
-    if neutral_roles:
-        embed.add_field(name="🟡 محايد", value="\n".join(f"{r.emoji} **{n}** ⭐" for n, r in neutral_roles), inline=False)
-    embed.set_footer(text="⚪ شائع  🔵 نادر  ⭐ أسطوري | استخدم &دور <اسم> للتفاصيل")
-    await ctx.send(embed=embed)
+    embed = discord.Embed(title="📖 أدوار مافيا 42", description=f"**{len(ROLES)} دور رسمي**\nاختر فئة لتصفّح الأدوار.", color=discord.Color.dark_blue())
+    await ctx.send(embed=embed, view=RoleBrowserView())
 
 
 @bot.command(name="دور", aliases=["role"])
 async def cmd_role_info(ctx: commands.Context, *, role_name: str = ""):
     if not role_name:
-        return await ctx.send("استخدم: `&دور <اسم>`", delete_after=5)
+        embed = discord.Embed(title="📖 أدوار مافيا 42", description=f"**{len(ROLES)} دور رسمي**\nاختر فئة لتصفّح الأدوار.", color=discord.Color.dark_blue())
+        return await ctx.send(embed=embed, view=RoleBrowserView())
     found = None
     for name, role in ROLES.items():
         if role_name.strip() in name or name in role_name.strip():
             found = role
             break
     if not found:
-        return await ctx.send(f"❌ لم أجد دوراً بهذا الاسم.", delete_after=5)
+        return await ctx.send("❌ لم أجد دوراً بهذا الاسم. افتح متصفح الأدوار بـ `&أدوار`.", delete_after=5)
     team_ar = {"mafia": "🔴 المافيا", "citizens": "🟢 المواطنون", "cult": "🟣 الطائفة", "neutral": "🟡 محايد", "helper": "🟠 مساعدو المافيا"}
     color = {"mafia": discord.Color.dark_red(), "citizens": discord.Color.green(), "cult": discord.Color.purple(), "neutral": discord.Color.gold(), "helper": discord.Color.orange()}.get(found.team, discord.Color.greyple())
     embed = discord.Embed(title=f"{found.emoji} {found.name}", description=found.description, color=color)
-    embed.add_field(name="الفريق", value=team_ar.get(found.team, found.team), inline=True)
-    embed.add_field(name="الندرة", value=found.rarity, inline=True)
+    embed.add_field(name="👥 الفريق", value=team_ar.get(found.team, found.team), inline=True)
+    embed.add_field(name="💎 الندرة", value=found.rarity, inline=True)
     if found.night_action:
         embed.add_field(name="🌙 فعل ليلي", value="✅", inline=True)
-    await ctx.send(embed=embed)
+    await ctx.send(embed=embed, view=RoleBrowserView())
 
 
 @bot.command(name="دوري", aliases=["myrole"])
@@ -1315,53 +1622,72 @@ async def cmd_my_role(ctx: commands.Context):
     try:
         embed = build_role_dm_embed(ROLES[player.role_name])
         await ctx.author.send(embed=embed)
-        try:
-            await ctx.message.add_reaction("✅")
-        except Exception:
-            pass
+        await ctx.message.add_reaction("✅")
     except discord.Forbidden:
-        await ctx.send("❌ افتح الخاص.", delete_after=5)
+        await ctx.send("❌ افتح الخاص لأرسل لك دورك.", delete_after=5)
+
+
+@bot.command(name="همس", aliases=["whisper"])
+async def cmd_whisper(ctx: commands.Context, *, message: str = ""):
+    """إرسال همسة سرية للمافيا."""
+    guild_id = ctx.guild.id if ctx.guild else ctx.author.id
+    if guild_id not in games:
+        return await ctx.send("❌ لا توجد لعبة.", delete_after=5)
+    game = games[guild_id]
+    if not message:
+        return await ctx.send("استخدم: `&همس <رسالة>` أو افتح لوحة الحالة `&حالة` واضغط همس.", delete_after=5)
+    player = next((p for p in game.players if p.user_id == ctx.author.id), None)
+    if not player or not player.alive:
+        return await ctx.send("❌ أنت ميت.", delete_after=5)
+    role = ROLES[player.role_name]
+    if role.team not in ("mafia", "helper") and not player.met_mafia:
+        return await ctx.send("❌ لست من المافيا.", delete_after=5)
+    sent = 0
+    for p in game.players:
+        if ROLES[p.role_name].team in ("mafia", "helper") and p.met_mafia:
+            try:
+                user = bot.get_user(p.user_id)
+                if user:
+                    embed = discord.Embed(title="💬 همسة 🔪", description=f"من {ctx.author.display_name}:\n{message}", color=discord.Color.dark_red())
+                    await user.send(embed=embed)
+                    sent += 1
+            except Exception:
+                pass
+    await ctx.send(f"✅ أُرسلت لـ {sent} عضو.", delete_after=5)
+
+
+@bot.command(name="وريث", aliases=["successor"])
+async def cmd_successor(ctx: commands.Context, member: discord.Member = None):
+    """تعيين وريث (لرئيس المافيا فقط)."""
+    if not member:
+        return await ctx.send("استخدم: `&وريث @لاعب`", delete_after=5)
+    guild_id = ctx.guild.id if ctx.guild else ctx.author.id
+    if guild_id not in games:
+        return await ctx.send("❌ لا توجد لعبة.", delete_after=5)
+    game = games[guild_id]
+    player = next((p for p in game.players if p.user_id == ctx.author.id), None)
+    if not player or player.role_name != "رئيس_المافيا":
+        return await ctx.send("❌ فقط رئيس المافيا.", delete_after=5)
+    target = next((p for p in game.players if p.user_id == member.id), None)
+    if not target or not target.alive:
+        return await ctx.send("❌ اللاعب غير متاح.", delete_after=5)
+    if ROLES[target.role_name].team not in ("mafia", "helper"):
+        return await ctx.send("❌ يجب أن يكون من المافيا.", delete_after=5)
+    player.role_name, target.role_name = target.role_name, player.role_name
+    await ctx.send(f"✅ تم نقل القيادة إلى {member.mention}", delete_after=10)
 
 
 @bot.command(name="مساعدة", aliases=["help", "h", "مساعده"])
 async def cmd_help(ctx: commands.Context, section: str = ""):
     if section in ("أدوار", "ادوار", "roles"):
-        return await cmd_roles(ctx)
+        embed = discord.Embed(title="📖 أدوار مافيا 42", description=f"**{len(ROLES)} دور رسمي**\nاختر فئة لتصفّح الأدوار.", color=discord.Color.dark_blue())
+        return await ctx.send(embed=embed, view=RoleBrowserView())
     embed = discord.Embed(
         title=f"📚 مساعدة مافيا 42 v{BOT_VERSION}",
-        description=f"بوت مافيا 42 التفاعلي مع {len(ROLES)} دور و {len(ACHIEVEMENTS)} إنجاز.",
+        description=f"بوت مافيا 42 التفاعلي مع {len(ROLES)} دور و {len(ACHIEVEMENTS)} إنجاز.\nاختر فئة من الأسفل.",
         color=discord.Color.blurple(),
     )
-    embed.add_field(name="🎮 كيف ألعب؟", value=(
-        "1️⃣ `&مافيا` → سيفتح **لوبي تفاعلي** بأزرار\n"
-        "2️⃣ اضغط **انضم** ثم **ابدأ**\n"
-        "3️⃣ دورك يصلك **في الخاص** (مخفي)\n"
-        "4️⃣ في النهار: اضغط على اسم لاعب للتصويت عليه\n"
-        "5️⃣ في الليل: يصلك **DM** بأزرار لاختيار هدفك"
-    ), inline=False)
-    embed.add_field(name="👤 أوامر اللاعب", value=(
-        "`&نقاط [@لاعب]` — النقاط\n"
-        "`&إحصائيات [@لاعب]`\n"
-        "`&إنجازاتي [@لاعب]`\n"
-        "`&تصنيف` — أفضل 10\n"
-        "`&دوري` — دورك (في الخاص)"
-    ), inline=False)
-    embed.add_field(name="📖 معلومات", value=(
-        "`&أدوار` — كل الأدوار\n"
-        "`&دور <اسم>` — تفاصيل دور"
-    ), inline=False)
-    embed.add_field(name="🔧 أوامر المشرف", value=(
-        "`&اضافه_قناة <ID>`\n"
-        "`&حذف_قناة <ID>`\n"
-        "`&قنوات`\n"
-        "`&ريست_نقاط`\n"
-        "`&اعطاء_نقاط @لاعب <كم>`\n"
-        "`&حذف_نقاط @لاعب <كم>`\n"
-        "`&اعلان <رسالة>`\n"
-        "`&باكب`"
-    ), inline=False)
-    embed.set_footer(text=f"مافيا 42 v{BOT_VERSION} | البادئة: & | {MIN_PLAYERS}-{MAX_PLAYERS} لاعبين")
-    await ctx.send(embed=embed)
+    await ctx.send(embed=embed, view=HelpView())
 
 
 @bot.command(name="نصيحة", aliases=["tip"])
