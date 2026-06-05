@@ -428,16 +428,23 @@ def build_lobby_embed(game: GameState) -> discord.Embed:
     return embed
 
 
-def build_day_embed(game: GameState, alive: list[PlayerState]) -> discord.Embed:
+def build_day_embed(game: GameState, alive: list[PlayerState], remaining: int = 0) -> discord.Embed:
     dead_text = ""
     if game.day > 0 and game.dead_players:
         recent = game.dead_players[-5:]
         dead_text = "\n".join(f"💀 <@{p.user_id}> — {ROLES[p.role_name].name}" for p in recent)
+    timer_text = f"⏰ **الوقت المتبقي:** {remaining} ثانية" if remaining > 0 else "⏰ **الوقت:** انتهى"
+    alive_voters = [p for p in alive]
+    voted = len(game.day_votes)
+    total_voters = len(alive_voters)
+    vote_status = f"🗳️ **الأصوات:** {voted}/{total_voters}"
     desc = (
         f"🧑 **الأحياء:** {len(alive)}/{len(game.players)}\n"
-        f"⏰ **الوقت المتبقي:** {int(DAY_DURATION_DEFAULT if not game.is_fast else 45)} ثانية للتصويت\n\n"
+        f"{timer_text}\n"
+        f"{vote_status}\n\n"
         f"💬 ناقشوا الأدوار بحرية، ثم صوّتوا على المشبوه.\n"
-        f"🗳️ اضغط على اسم اللاعب للتصويت عليه."
+        f"🗳️ اضغط على اسم اللاعب للتصويت عليه.\n"
+        f"🔄 يمكنك تغيير تصويتك قبل انتهاء الوقت."
     )
     if dead_text:
         desc += f"\n\n**ماتوا الليلة:**\n{dead_text}"
@@ -577,8 +584,14 @@ class MafiaLobbyView(discord.ui.View):
         game = self._get_game(interaction)
         if not game:
             return await interaction.response.send_message("❌ لا توجد لعبة.", ephemeral=True)
-        if interaction.user.id != game.host_id and not (interaction.user.guild_permissions and interaction.user.guild_permissions.administrator):
-            return await interaction.response.send_message("❌ فقط المضيف أو مشرف.", ephemeral=True)
+        if not is_game_admin(interaction, game):
+            return await interaction.response.send_message("❌ فقط المضيف أو المشرف يمكنهم الإنهاء.", ephemeral=True)
+        # نافذة تأكيد
+        confirm = ConfirmView(timeout=15)
+        await interaction.response.send_message("⚠️ هل أنت متأكد من إنهاء اللعبة؟", view=confirm, ephemeral=True)
+        await confirm.wait()
+        if confirm.result is not True:
+            return await interaction.followup.send("❌ تم الإلغاء.", ephemeral=True)
         for child in self.children:
             child.disabled = True
         try:
@@ -588,7 +601,7 @@ class MafiaLobbyView(discord.ui.View):
         if game.next_phase_event:
             game.next_phase_event.set()
         games.pop(game.guild_id, None)
-        await interaction.response.send_message("⛔ تم إنهاء اللعبة.", ephemeral=False)
+        await interaction.followup.send("⛔ تم إنهاء اللعبة.", ephemeral=False)
 
 
 class DayVoteView(discord.ui.View):
@@ -631,11 +644,20 @@ class DayVoteView(discord.ui.View):
             return await interaction.response.send_message("❌ أنت ميت.", ephemeral=True)
         if target_id and not any(p.user_id == target_id and p.alive for p in self.game.players):
             return await interaction.response.send_message("❌ اللاعب غير متاح.", ephemeral=True)
+        old_vote = self.game.day_votes.get(interaction.user.id)
         self.game.day_votes[interaction.user.id] = target_id or 0
+        # عرض عدد الأصوات المتبقية
+        alive_voters = [p for p in self.game.players if p.alive]
+        voted = len(self.game.day_votes)
+        remaining = len(alive_voters) - voted
         if target_id:
-            await interaction.response.send_message(f"🗳️ صوّت على <@{target_id}>", ephemeral=True)
+            msg = f"🗳️ صوّت على <@{target_id}>"
+            if old_vote and old_vote != 0 and old_vote != target_id:
+                msg += " (تم تغيير التصويت)"
+            msg += f"\n📊 الأصوات المتبقية: {remaining}"
+            await interaction.response.send_message(msg, ephemeral=True)
         else:
-            await interaction.response.send_message("⏭ تخطيت التصويت.", ephemeral=True)
+            await interaction.response.send_message(f"⏭ تخطيت التصويت\n📊 الأصوات المتبقية: {remaining}", ephemeral=True)
 
     async def end_day(self, interaction: discord.Interaction):
         game = self.game
@@ -1113,6 +1135,41 @@ def is_allowed_channel(ctx: commands.Context) -> bool:
     return ctx.channel.id in channels
 
 
+def is_game_admin(interaction: discord.Interaction, game: GameState) -> bool:
+    """التحقق من أن المستخدم هو المضيف أو مشرف السيرفر."""
+    if interaction.user.id == game.host_id:
+        return True
+    member = interaction.guild.get_member(interaction.user.id) if interaction.guild else None
+    return bool(member and member.permissions.administrator)
+
+
+# ============================================================================
+# نافذة التأكيد
+# ============================================================================
+class ConfirmView(discord.ui.View):
+    """نافذة تأكيد بزرين: نعم / لا."""
+
+    def __init__(self, timeout: int = 30):
+        super().__init__(timeout=timeout)
+        self.result: Optional[bool] = None
+
+    @discord.ui.button(label="✅ نعم", style=discord.ButtonStyle.green, custom_id="confirm_yes")
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.result = True
+        self.stop()
+        await interaction.response.defer()
+
+    @discord.ui.button(label="❌ لا", style=discord.ButtonStyle.red, custom_id="confirm_no")
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.result = False
+        self.stop()
+        await interaction.response.defer()
+
+    async def on_timeout(self):
+        self.result = False
+        self.stop()
+
+
 # ============================================================================
 # منطق اللعبة
 # ============================================================================
@@ -1242,14 +1299,25 @@ async def game_loop(game: GameState, channel: discord.TextChannel) -> None:
 
 async def run_day_phase(game: GameState, channel: discord.TextChannel) -> None:
     alive = [p for p in game.players if p.alive]
-    embed = build_day_embed(game, alive)
+    duration = DAY_DURATION_DEFAULT if not game.is_fast else 45
+    embed = build_day_embed(game, alive, duration)
     view = DayVoteView(game, game.guild_id, channel.id)
     msg = await channel.send(embed=embed, view=view)
     game.day_message_id = msg.id
     game.day_votes.clear()
+    # عداد تنازلي متحرك
+    for remaining in range(duration, 0, -10):
+        if game.next_phase_event and game.next_phase_event.is_set():
+            break
+        try:
+            embed = build_day_embed(game, alive, remaining)
+            await msg.edit(embed=embed)
+        except Exception:
+            pass
+        await asyncio.sleep(10)
     # انتظار انتهاء الوقت أو ضغط المضيف
     try:
-        await asyncio.wait_for(game.next_phase_event.wait(), timeout=DAY_DURATION_DEFAULT if not game.is_fast else 45)
+        await asyncio.wait_for(game.next_phase_event.wait(), timeout=5)
     except asyncio.TimeoutError:
         pass
     view.stop()
