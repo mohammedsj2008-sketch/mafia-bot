@@ -812,65 +812,87 @@ class MafiaLobbyView(discord.ui.View):
         except Exception:
             pass
 
+    async def _handle_button(self, interaction: discord.Interaction, callback):
+        """معالجة موحدة للأزرار: defer + تنفيذ + followup."""
+        try:
+            await interaction.response.defer(ephemeral=False)
+        except Exception:
+            pass
+        try:
+            await callback()
+        except Exception as e:
+            log.error("خطأ في اللوبي: %s", e)
+
     @discord.ui.button(label="📥 انضم", style=discord.ButtonStyle.green, custom_id="ml_join")
     async def join(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._handle_button(interaction, lambda: self._do_join(interaction))
+
+    async def _do_join(self, interaction: discord.Interaction):
         game = self._get_game(interaction)
         if not game:
-            return await interaction.response.send_message("❌ لا توجد لعبة. أنشئ لعبة جديدة بـ `&مافيا`", ephemeral=True)
+            return await interaction.followup.send("❌ لا توجد لعبة. أنشئ لعبة جديدة بـ `&مافيا`", ephemeral=True)
         if game.started:
-            return await interaction.response.send_message("⚠️ اللعبة بدأت بالفعل.", ephemeral=True)
+            return await interaction.followup.send("⚠️ اللعبة بدأت بالفعل.", ephemeral=True)
         if len(game.players) >= MAX_PLAYERS:
-            return await interaction.response.send_message(f"❌ وصلنا الحد ({MAX_PLAYERS}).", ephemeral=True)
+            return await interaction.followup.send(f"❌ وصلنا الحد ({MAX_PLAYERS}).", ephemeral=True)
         if any(p.user_id == interaction.user.id for p in game.players):
-            return await interaction.response.send_message("⚠️ أنت منضم.", ephemeral=True)
+            return await interaction.followup.send("⚠️ أنت منضم.", ephemeral=True)
         game.players.append(PlayerState(user_id=interaction.user.id, display_name=interaction.user.display_name))
         await self._refresh(interaction, game)
-        await interaction.response.send_message(f"✅ انضممت! ({len(game.players)}/{MAX_PLAYERS})", ephemeral=True)
+        await interaction.followup.send(f"✅ انضممت! ({len(game.players)}/{MAX_PLAYERS})", ephemeral=True)
 
     @discord.ui.button(label="📤 خروج", style=discord.ButtonStyle.red, custom_id="ml_leave")
     async def leave(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._handle_button(interaction, lambda: self._do_leave(interaction))
+
+    async def _do_leave(self, interaction: discord.Interaction):
         game = self._get_game(interaction)
         if not game or game.started:
-            return await interaction.response.send_message("❌ لا يمكن الخروج الآن.", ephemeral=True)
+            return await interaction.followup.send("❌ لا يمكن الخروج الآن.", ephemeral=True)
         for i, p in enumerate(game.players):
             if p.user_id == interaction.user.id:
                 game.players.pop(i)
                 await self._refresh(interaction, game)
-                return await interaction.response.send_message("✅ غادرت.", ephemeral=True)
-        await interaction.response.send_message("⚠️ لست منضماً.", ephemeral=True)
+                return await interaction.followup.send("✅ غادرت.", ephemeral=True)
+        await interaction.followup.send("⚠️ لست منضماً.", ephemeral=True)
 
     @discord.ui.button(label="▶️ ابدأ اللعبة", style=discord.ButtonStyle.blurple, custom_id="ml_start")
     async def start(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._handle_button(interaction, lambda: self._do_start(interaction))
+
+    async def _do_start(self, interaction: discord.Interaction):
         game = self._get_game(interaction)
         if not game:
-            return await interaction.response.send_message("❌ لا توجد لعبة.", ephemeral=True)
+            return await interaction.followup.send("❌ لا توجد لعبة.", ephemeral=True)
         if interaction.user.id != game.host_id:
-            return await interaction.response.send_message("❌ فقط المضيف.", ephemeral=True)
+            return await interaction.followup.send("❌ فقط المضيف.", ephemeral=True)
         if game.started:
-            return await interaction.response.send_message("⚠️ بدأت بالفعل.", ephemeral=True)
+            return await interaction.followup.send("⚠️ بدأت بالفعل.", ephemeral=True)
         if len(game.players) < MIN_PLAYERS:
-            return await interaction.response.send_message(f"❌ تحتاج {MIN_PLAYERS} لاعبين على الأقل.目前: {len(game.players)}", ephemeral=True)
+            return await interaction.followup.send(f"❌ تحتاج {MIN_PLAYERS} لاعبين على الأقل.", ephemeral=True)
         for child in self.children:
             child.disabled = True
         try:
             await interaction.message.edit(embed=build_lobby_embed(game), view=self)
         except Exception:
             pass
-        await interaction.response.send_message("🎮 جارٍ بدء اللعبة...", ephemeral=True)
+        await interaction.followup.send("🎮 جارٍ بدء اللعبة...", ephemeral=True)
         bot.loop.create_task(start_game_flow(game, interaction.channel))
-        # إلغاء مهمة تحديث اللوبي
         if game.guild_id in lobby_refresh_tasks:
             lobby_refresh_tasks.pop(game.guild_id).cancel()
 
     @discord.ui.button(label="⛔ إنهاء", style=discord.ButtonStyle.grey, custom_id="ml_end")
     async def end(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._handle_button(interaction, lambda: self._do_end(interaction))
+
+    async def _do_end(self, interaction: discord.Interaction):
         game = self._get_game(interaction)
         if not game:
-            return await interaction.response.send_message("❌ لا توجد لعبة.", ephemeral=True)
+            return await interaction.followup.send("❌ لا توجد لعبة.", ephemeral=True)
         if not is_game_admin(interaction, game):
-            return await interaction.response.send_message("❌ فقط المضيف أو المشرف يمكنهم الإنهاء.", ephemeral=True)
+            return await interaction.followup.send("❌ فقط المضيف أو المشرف يمكنهم الإنهاء.", ephemeral=True)
         confirm = ConfirmView(timeout=15)
-        await interaction.response.send_message("⚠️ هل أنت متأكد من إنهاء اللعبة؟", view=confirm, ephemeral=True)
+        await interaction.followup.send("⚠️ هل أنت متأكد من إنهاء اللعبة؟", view=confirm, ephemeral=True)
         await confirm.wait()
         if confirm.result is not True:
             return await interaction.followup.send("❌ تم الإلغاء.", ephemeral=True)
@@ -883,7 +905,6 @@ class MafiaLobbyView(discord.ui.View):
         if game.next_phase_event:
             game.next_phase_event.set()
         games.pop(game.guild_id, None)
-        # إلغاء مهمة تحديث اللوبي
         if game.guild_id in lobby_refresh_tasks:
             lobby_refresh_tasks.pop(game.guild_id).cancel()
         await interaction.followup.send("⛔ تم إنهاء اللعبة.", ephemeral=False)
